@@ -154,9 +154,11 @@ def run_pipeline():
         input("Press ENTER to authorize the search and extraction for PHASE 1... ")
         print("!"*60 + "\n")
         
+       # Phase 1: Research and Core Content
+    # We pass 'product_name' to dynamic task methods
         tasks_to_run = [
-            core_crew_module.source_research_task(),
-            core_crew_module.tech_specs_extraction_task(),
+            core_crew_module.source_research_task(product_name),
+            core_crew_module.tech_specs_extraction_task(product_name),
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
             core_crew_module.quality_assurance_task(),

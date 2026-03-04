@@ -124,16 +124,27 @@ class ECommerceContentCrew:
         )
 
     # --- ІНІЦІАЛІЗАЦІЯ ЗАВДАНЬ ---
-    def source_research_task(self) -> Task:
+    def _is_filament(self, product_name: str) -> bool:
+        filament_keywords = ['pla', 'petg', 'abs', 'asa', 'tpu', 'nylon', 'carbon', 'filament', 'resin', 'kg', 'spool']
+        return any(kw in product_name.lower() for kw in filament_keywords)
+
+    def source_research_task(self, product_name: str) -> Task:
+        config = tasks_config['source_research_task'].copy()
+        if self._is_filament(product_name):
+            config['description'] = config['description'] + "\n\nCRITICAL: This is a FILAMENT/MATERIAL. Focus on finding technical data sheets (TDS), safety data sheets (SDS), and printing temperatures."
         return Task(
-            config=tasks_config['source_research_task'],
+            config=config,
             agent=self.web_researcher(),
             human_input=True
         )
 
-    def tech_specs_extraction_task(self) -> Task:
+    def tech_specs_extraction_task(self, product_name: str) -> Task:
         config = tasks_config['tech_specs_extraction_task'].copy()
         config['description'] = config['description'] + "\n\n{language_instruction}"
+        
+        if self._is_filament(product_name):
+            config['description'] = config['description'] + "\n\nREQUIRED METERIAL SPECS: Density, Melt Flow Index, Impact Strength, Heat Deflection, and Diameter Tolerance."
+        
         return Task(
             config=config,
             agent=self.tech_specs_analyst(),
@@ -172,25 +183,22 @@ class ECommerceContentCrew:
             agent=self.frontend_developer()
         )
 
-    @property
-    def agents(self):
-        return[
-            self.web_researcher(),
-            self.tech_specs_analyst(),
-            self.seo_strategist(),
-            self.copywriter(),
-            self.editor_qa(),
-            self.frontend_developer()
-        ]
-
     def create_crew(self, tasks_to_run: list) -> Crew:
         """Створює Crew з послідовним процесом для гарантії Human-in-the-Loop"""
+        # Ensure agents are re-initialized with fresh LLMs for each crew creation
         return Crew(
-            agents=self.agents,
+            agents=[
+                self.web_researcher(),
+                self.tech_specs_analyst(),
+                self.seo_strategist(),
+                self.copywriter(),
+                self.editor_qa(),
+                self.frontend_developer()
+            ],
             tasks=tasks_to_run,
-            process=Process.sequential, # ПОВЕРНУЛИ НА SEQUENTIAL!
-            memory=True,                # Пам'ять залишається
-            cache=True,                 # Кеш залишається
+            process=Process.sequential, 
+            memory=True,                
+            cache=True,                 
             verbose=True
         )
 

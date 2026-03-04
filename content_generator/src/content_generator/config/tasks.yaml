@@ -14,10 +14,11 @@ tech_specs_extraction_task:
     [INPUT DATA]: The text is either provided directly here: {raw_source_text} OR passed automatically from the Web Researcher agent's output.
     
     YOUR EXTRACTION MISSION:
-    1. Extract every single technical specification. Pay special attention to GEO-critical parameters: Build Volume, Max Nozzle/Bed Temperatures, Kinematics, Print Speed, and exact Compatible Filaments.
-    2. Identify and extract any Official FAQs, Troubleshooting steps, or Maintenance guides found in the text.
-    3. Categorize technical specs logically (e.g., "Printing specifications", "Dimensions", "Interfaces").
-    4. Do NOT guess, assume, or hallucinate.
+    1. Extract every technical specification. 
+       - FOR MACHINES: Build Volume, Max Temps, Kinematics, Speed.
+       - FOR FILAMENTS: Material type (PLA/PETG), Diameter, Weight, Spool type, Melting Point, and Physical Properties.
+    2. Identify Official FAQs or Maintenance guides.
+    3. Categorize logical categories (e.g., "Chemical Properties" for filaments).
     
     IMPORTANT JSON STRUCTURE RULE:
     Your output for "Technical_Specifications" MUST be nested by categories.
