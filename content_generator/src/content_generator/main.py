@@ -167,7 +167,7 @@ def run_pipeline():
     else:
         print(f"✅ Знайдено {len(raw_text)} символів сирого тексту. Пропускаємо етап пошуку!")
         tasks_to_run = [
-            core_crew_module.tech_specs_extraction_task(),
+            core_crew_module.tech_specs_extraction_task(product_name),
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
             core_crew_module.quality_assurance_task(),
