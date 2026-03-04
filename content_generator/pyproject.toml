@@ -1,0 +1,29 @@
+[project]
+name = "content_generator"
+version = "0.1.0"
+description = "content-generator using crewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "beautifulsoup4>=4.13.5",
+    "crewai[tools]==1.9.3",
+    "firecrawl-py>=4.18.0",
+    "pypdf2>=3.0.1",
+    "selenium>=4.41.0",
+    "webdriver-manager>=4.0.2",
+]
+
+[project.scripts]
+content_generator = "content_generator.main:run"
+run_crew = "content_generator.main:run"
+train = "content_generator.main:train"
+replay = "content_generator.main:replay"
+test = "content_generator.main:test"
+run_with_trigger = "content_generator.main:run_with_trigger"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"

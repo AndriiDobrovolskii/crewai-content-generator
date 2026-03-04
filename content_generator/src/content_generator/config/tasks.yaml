@@ -1,0 +1,129 @@
+source_research_task:
+  description: >
+    Find the official manufacturer's main product page for {product_name}. 
+    Additionally, actively search for any official support pages, user manuals, or FAQ sections related to this exact product.
+    [HUMAN-IN-THE-LOOP]: Present the found URL(s) (both the main page and any support pages) to the human operator for confirmation before proceeding. 
+    Once the URL(s) are confirmed, use the scraping tool to extract the full product description, technical specifications, and any available troubleshooting/FAQ content from these pages.
+  expected_output: >
+    A comprehensive raw text document containing the complete, unedited product description, all technical specifications, and official FAQ/troubleshooting data (if available), exactly as they appear on the official manufacturer's website(s).
+  agent: web_researcher
+
+tech_specs_extraction_task:
+  description: >
+    Analyze the raw source text for {product_name}. 
+    [INPUT DATA]: The text is either provided directly here: {raw_source_text} OR passed automatically from the Web Researcher agent's output.
+    
+    YOUR EXTRACTION MISSION:
+    1. Extract every single technical specification. Pay special attention to GEO-critical parameters: Build Volume, Max Nozzle/Bed Temperatures, Kinematics, Print Speed, and exact Compatible Filaments.
+    2. Identify and extract any Official FAQs, Troubleshooting steps, or Maintenance guides found in the text.
+    3. Categorize technical specs logically (e.g., "Printing specifications", "Dimensions", "Interfaces").
+    4. Do NOT guess, assume, or hallucinate.
+    
+    IMPORTANT JSON STRUCTURE RULE:
+    Your output for "Technical_Specifications" MUST be nested by categories.
+    CORRECT: { "Printing": { "Speed": "600mm/s" }, "Dimensions": { "Weight": "10kg" } }
+    WRONG: { "Speed": "600mm/s", "Weight": "10kg" }
+  expected_output: >
+    A strict, well-structured JSON object with two main keys: 
+    1. "Technical_Specifications" (grouped logically by categories).
+    2. "Support_Data" (containing arrays for "FAQs" and "troubleshooting" steps if found).
+    NO conversational text, NO markdown formatting. Return ONLY the pure JSON object.
+  agent: tech_specs_analyst
+
+seo_strategy_task:
+  description: >
+    Analyze the raw text and technical specs (including support data) for {product_name}. 
+    Develop a comprehensive SEO and GEO strategy targeted at {target_country} for {site_name}.
+    1. Use your search tool to analyze real Google search autocomplete suggestions or related queries for {product_name} in {target_country}. Based on real data, select 10 high-impact keywords. 
+    2. Define the unique Tone of Voice. 
+    3. Create a strict Content Blueprint that MANDATES:
+       - An "Answer-First" summary block (40-75 words) at the very top.
+       - H2/H3 headings formatted as natural user questions (Semantic Chunking).
+       - A dedicated "Troubleshooting" or "Expert Advice" section (E-E-A-T) derived from the Analyst's support data.
+    4. Generate strict Meta tags following the exact length (<55/<155 chars) and symbol rules.
+  expected_output: >
+    A master GEO Content Brief containing:
+    1. Target Keywords & Tone of Voice instructions.
+    2. Structural Outline (H2/H3 Questions) explicitly marking the "Answer-First" block location.
+    3. Specific E-E-A-T directives (e.g., "Include a troubleshooting tip for nozzle cleaning").
+    4. SEO Metadata (JSON): H1 (Clean), Title (Safe symbols only), Description (CTA included).
+  agent: seo_strategist
+
+copywriting_task:
+  description: >
+    Write the master English product description for {product_name} based on the raw source text, the Analyst's Technical & Support JSON, and the SEO Strategist's brief.
+    
+    CRITICAL GEO STRUCTURE:
+    1. The "Answer-First" Hook: You MUST start with a declarative, fact-dense summary (40-75 words) that immediately answers "What is this?" using hard specs.
+    2. Fact Density: Throughout the body, enforce high fact density. Incorporate specific metrics (e.g., "300°C", "0.02mm") naturally every 150-200 words.
+    3. E-E-A-T Section: If the Analyst's JSON contains "Support_Data" (Troubleshooting/FAQs), you MUST write a dedicated "Expert Advice" or "Maintenance" section using this data. This enables downstream 'HowTo' schema generation.
+    4. Style: Follow the "No Fluff" and "Burstiness" philosophy. Never just list specs—explain "The Why" (benefits).
+    5. Iframe Handling: If the raw text contains `<iframe>` tags, extract and place them logically.
+  expected_output: >
+    A highly engaging, 100% original English product description.
+    It MUST explicitly contain:
+    - An "Answer-First" summary at the top.
+    - A Troubleshooting/FAQ section (if source data permits).
+    - Hard numbers integrated into the narrative.
+    Formatted with basic semantic markers but NOT yet wrapped in final OpenCart HTML.
+  agent: copywriter
+
+quality_assurance_task:
+  description: >
+    Review the Copywriter's draft against the raw Technical JSON and SEO Brief.
+    1. **Strict GEO Compliance:** Verify the text starts *immediately* with a declarative "Answer-First" summary (40-75 words) containing hard specs. Ensure high "Fact Density" (specific metrics like mm/°C appear every 150-200 words).
+    2. **E-E-A-T Integration:** Check the Analyst's JSON. If "Support_Data" (FAQs/Troubleshooting) exists, verify the Copywriter included a dedicated section for it. If missing, REJECT the draft.
+    3. **Accuracy & Uniqueness:** Cross-reference every single number against the JSON (Zero Hallucinations) and verify >80% uniqueness using the Similarity Tool.
+    If it fails ANY check (especially missing GEO structure or support data), reject with specific instructions.
+  expected_output: >
+    The final, vetted English text that is 100% accurate, highly unique (>80%), and strictly follows the "Answer-First" and "Fact Density" GEO standards.
+  agent: editor_qa
+
+html_integration_task:
+  description: >
+    Take the approved English text and the Analyst's JSON technical specifications. 
+    Transform them into a flawless, OpenCart-compliant HTML structure with embedded GEO Microdata.
+    
+    1. **Strict CMS Rules:** No `<h1>` in body. Append `<br>` after every `</p>` (except the last). Convert `<pre>` to `<small>`.
+    2. **GEO Schema Implementation:** 
+       - Identify the "Troubleshooting/Maintenance" section (if present) and wrap it in `<div itemscope itemtype="https://schema.org/HowTo">`. You MUST use ordered lists `<ol>` for the sequence of actions and apply `HowToStep` microdata to each list item (`<li>`).
+       - Identify the "FAQ" section (if present) and wrap it in `<div itemscope itemtype="https://schema.org/FAQPage">`.
+       - NEVER use `<script>` tags (JSON-LD). Use only inline attributes.
+    3. **Tech Specs Table (CRITICAL):** Convert the JSON specs into an HTML table wrapped EXACTLY in: `<div class="table-responsive"><table class="table table-striped table-hover table-bordered">`. 
+       - Inside the table, wrap property names in `<strong>` tags.
+       - Ensure property values have NO trailing periods (e.g., "300mm", not "300mm.").
+    4. **Semantic Highlighting & Lists:** 
+       - Apply `<strong>` ONLY to hard metrics in paragraphs (e.g., "300°C"). Max 2-3 per paragraph.
+       - Use `<ul>` lists ONLY for feature highlights or "What's in the box" (package contents).
+       - Use `<ol>` lists for step-by-step guides or sequential instructions.
+       - NEVER put technical key-value pairs in `<ul>` or `<ol>` (they belong in the table).
+  expected_output: >
+    A single, raw HTML string containing the fully formatted product page.
+    MUST include:
+    - The "Answer-First" block at the top.
+    - The responsive Tech Specs Table (no trailing periods).
+    - Inline Schema.org Microdata for FAQs/HowTo.
+    - `<ul>` or `<ol>` lists for package contents, features, or sequential steps (if applicable).
+    NO Markdown code blocks. Just the pure HTML code starting with the first tag.
+  agent: frontend_developer
+
+localization_task:
+  description: >
+    Take the following finalized English HTML product page (which contains embedded Schema.org Microdata):
+    
+    --- START OF HTML ---
+    {base_html}
+    --- END OF HTML ---
+    
+    Translate and transcreate the content into {target_language} specifically for the {site_name} audience.
+    
+    CRITICAL EXECUTION RULES:
+    1. **Apply Your Persona:** strictly follow the geographical, logistical, and measurement rules defined in your specific Agent Backstory.
+    2. **GEO & Schema Protection:** The input HTML contains inline Microdata attributes. NEVER translate attribute keys (`itemprop`, `itemscope`). ONLY translate the human-readable text values inside the tags.
+    3. **HTML Integrity:** Return ONLY the raw HTML string. NEVER translate HTML tags (`<div>`, `<p>`), classes, or image URLs. Do NOT add Markdown (```html).
+    4. **SEO:** You MUST translate the text inside `alt="..."` and `title="..."` attributes.
+    5. **Brand Safety:** Do NOT translate Brand or Model names.
+  expected_output: >
+    The localized, production-ready raw HTML string in {target_language}.
+    NO Markdown code blocks. NO conversational text. Just the pure HTML code with preserved GEO Microdata.
+  agent: localizer_ua
