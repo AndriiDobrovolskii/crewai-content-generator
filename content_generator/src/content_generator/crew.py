@@ -6,7 +6,7 @@ from crewai import Agent, Crew, Process, Task, LLM
 from crewai_tools import SerperDevTool, WebsiteSearchTool, PDFSearchTool
 
 # Оновлені імпорти (оскільки tools.py тепер у папці tools/)
-from tools.custom_tools import ContentSimilarityTool, USMeasurementCalculatorTool
+from .tools.custom_tools import ContentSimilarityTool, USMeasurementCalculatorTool
 
 # --- ДИНАМІЧНІ ШЛЯХИ ДО КОНФІГІВ ---
 # Отримуємо шлях до папки, де лежить сам файл crew.py

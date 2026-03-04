@@ -1,13 +1,21 @@
 import os
 import shutil
 import datetime
+import sys
+import io
 from dotenv import load_dotenv
+
+# Force UTF-8 encoding for stdout/stderr to support Ukrainian characters on Windows
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Завантажуємо ключі з .env файлу, який лежить у корені
 load_dotenv()
 
-from tools.parsers import extract_text_from_pdf, extract_text_from_urls
-from crew import ECommerceContentCrew, LocalizationCrew
+from .tools.parsers import extract_text_from_pdf, extract_text_from_urls
+from .crew import ECommerceContentCrew, LocalizationCrew
 from crewai import Crew, Process
 
 SITES_CONFIG = {
@@ -219,5 +227,9 @@ def run_pipeline():
 
     print(f"🎉 Готово! Всі файли та архів знаходяться тут:\n   👉 {output_dir}")
 
-if __name__ == "__main__":
+def run():
+    """Entry point for the crew"""
     run_pipeline()
+
+if __name__ == "__main__":
+    run()
