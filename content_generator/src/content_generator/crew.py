@@ -6,7 +6,10 @@ from crewai import Agent, Crew, Process, Task, LLM
 from crewai_tools import SerperDevTool, WebsiteSearchTool, PDFSearchTool
 
 # Оновлені імпорти (оскільки tools.py тепер у папці tools/)
-from .tools.custom_tools import ContentSimilarityTool, USMeasurementCalculatorTool
+try:
+    from content_generator.tools.custom_tools import ContentSimilarityTool, USMeasurementCalculatorTool
+except ImportError:
+    from .tools.custom_tools import ContentSimilarityTool, USMeasurementCalculatorTool
 
 # --- ДИНАМІЧНІ ШЛЯХИ ДО КОНФІГІВ ---
 # Отримуємо шлях до папки, де лежить сам файл crew.py
@@ -24,15 +27,23 @@ with open(tasks_config_path, 'r', encoding='utf-8') as f:
 # =====================================================================
 # ⚙️ НАЛАШТУВАННЯ LLM
 # =====================================================================
-# Для тестування використовуємо одну модель. 
-# ВАЖЛИВО: Для ієрархічного процесу (Hierarchical) Менеджер МАЄ бути розумним.
-# Завантажуємо назви моделей з .env (з фолбеком на дефолтні значення, якщо змінної немає)
-default_model_name = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
-manager_model_name = os.getenv("MANAGER_MODEL", "gpt-4o")
+# Відокремлюємо LLM для різних агентів, щоб уникнути "Парадоксу надійності".
+# - gpt-4o-mini для пошуку
+# - gemini-1.5-pro для аналізу техспек
+# - gpt-4o для копірайтингу, SEO, фронтенду та локалізації
+
+researcher_model_name = os.getenv("RESEARCHER_MODEL", "gpt-4o-mini")
+analyst_model_name = os.getenv("ANALYST_MODEL", "gemini/gemini-1.5-pro")
+writer_model_name = os.getenv("WRITER_MODEL", "gpt-4o")
+frontend_model_name = os.getenv("FRONTEND_MODEL", "gpt-4o")
+localizer_model_name = os.getenv("LOCALIZER_MODEL", "gpt-4o")
 
 # Ініціалізуємо LLM
-default_llm = LLM(model=default_model_name)
-manager_llm = LLM(model=manager_model_name)
+researcher_llm = LLM(model=researcher_model_name)
+analyst_llm = LLM(model=analyst_model_name)
+writer_llm = LLM(model=writer_model_name)
+frontend_llm = LLM(model=frontend_model_name)
+localizer_llm = LLM(model=localizer_model_name)
 
 
 # =====================================================================
@@ -42,12 +53,26 @@ class SupportData(BaseModel):
     faqs: List[Dict[str, str]] = Field(default_factory=list, description="Array of FAQs found in the text. Format: [{'Question': '...', 'Answer': '...'}]")
     troubleshooting: List[Dict[str, str]] = Field(default_factory=list, description="Array of troubleshooting steps or guides found.")
 
+class ProductImage(BaseModel):
+    url: str = Field(..., description="The EXACT absolute URL of the official image (e.g., https://...). Must not be a relative path.")
+    alt_text: str = Field(..., description="A highly descriptive alt text for SEO (e.g., 'Bambu Lab X1 Carbon Extruder Close-up').")
+    context: str = Field(..., description="Where this image belongs (e.g., 'Main Product', 'High Speed Showcase', 'Dimensions').")
+
 class TechSpecsOutput(BaseModel):
     Technical_Specifications: Dict[str, Dict[str, str]] = Field(
         ..., 
-        description="MUST be a NESTED dictionary. Top-level keys are Categories (e.g., 'Printing', 'Power'). Inner keys are Specification Names (e.g., 'Nozzle Temp'). Values are the specs."
+        description="STRICT RULE: Values MUST be physical metrics (mm, °C, MPa, kg). DO NOT include marketing advantages or features here. MUST be a NESTED dictionary grouped by categories."
     )
-    Support_Data: SupportData = Field(..., description="Extracted FAQs and Troubleshooting data for GEO schema generation")
+    # ✅ ВИПРАВЛЕНО: Дублікат Support_Data видалено, залишено один правильний варіант
+    Support_Data: SupportData = Field(
+        ..., 
+        description="Extracted FAQs and Troubleshooting data for GEO schema generation"
+    )
+    # ✅ ДОДАНО ВЕКТОР ЗОБРАЖЕНЬ:
+    Official_Images: List[ProductImage] = Field(
+        default_factory=list, 
+        description="List of official high-resolution product images found in the raw source text."
+    )
 
     @field_validator('Technical_Specifications', mode='before')
     @classmethod
@@ -82,29 +107,29 @@ class ECommerceContentCrew:
             config=agents_config['web_researcher'],
             # RAG-інструменти для глибокого семантичного пошуку по сторінках і мануалах
             tools=[SerperDevTool(), WebsiteSearchTool(), PDFSearchTool()], 
-            llm=default_llm,
+            llm=researcher_llm,
             verbose=True
         )
 
     def tech_specs_analyst(self) -> Agent:
         return Agent(
             config=agents_config['tech_specs_analyst'],
-            llm=default_llm,
+            llm=analyst_llm,
             verbose=True
         )
 
     def seo_strategist(self) -> Agent:
         return Agent(
             config=agents_config['seo_strategist'],
-            tools=[SerperDevTool()], # ДОДАНО ІНСТРУМЕНТ! Тепер він має доступ до Google
-            llm=default_llm,
+            tools=[SerperDevTool()], # Тепер він має доступ до Google
+            llm=writer_llm,
             verbose=True
         )
 
     def copywriter(self) -> Agent:
         return Agent(
             config=agents_config['copywriter'],
-            llm=default_llm,
+            llm=writer_llm,
             verbose=True
         )
 
@@ -112,30 +137,34 @@ class ECommerceContentCrew:
         return Agent(
             config=agents_config['editor_qa'],
             tools=[ContentSimilarityTool()],
-            llm=default_llm,
+            llm=writer_llm,
             verbose=True
         )
 
     def frontend_developer(self) -> Agent:
         return Agent(
             config=agents_config['frontend_developer'],
-            llm=default_llm,
+            llm=frontend_llm,
             verbose=True
         )
 
     # --- ІНІЦІАЛІЗАЦІЯ ЗАВДАНЬ ---
     def _is_filament(self, product_name: str) -> bool:
-        filament_keywords = ['pla', 'petg', 'abs', 'asa', 'tpu', 'nylon', 'carbon', 'filament', 'resin', 'kg', 'spool']
+        filament_keywords =['pla', 'petg', 'abs', 'asa', 'tpu', 'nylon', 'carbon', 'filament', 'resin', 'kg', 'spool']
         return any(kw in product_name.lower() for kw in filament_keywords)
 
-    def source_research_task(self, product_name: str) -> Task:
-        config = tasks_config['source_research_task'].copy()
-        if self._is_filament(product_name):
-            config['description'] = config['description'] + "\n\nCRITICAL: This is a FILAMENT/MATERIAL. Focus on finding technical data sheets (TDS), safety data sheets (SDS), and printing temperatures."
+    def url_discovery_task(self, product_name: str) -> Task:
         return Task(
-            config=config,
+            config=tasks_config['url_discovery_task'],
             agent=self.web_researcher(),
-            human_input=True
+            human_input=True # 🛑 Зупинка №1: Користувач перевіряє знайдені URL
+        )
+
+    def content_extraction_task(self, product_name: str) -> Task:
+        return Task(
+            config=tasks_config['content_extraction_task'],
+            agent=self.web_researcher(),
+            human_input=True # 🛑 Зупинка №2: Користувач перевіряє спарсений текст
         )
 
     def tech_specs_extraction_task(self, product_name: str) -> Task:
@@ -143,7 +172,7 @@ class ECommerceContentCrew:
         config['description'] = config['description'] + "\n\n{language_instruction}"
         
         if self._is_filament(product_name):
-            config['description'] = config['description'] + "\n\nREQUIRED METERIAL SPECS: Density, Melt Flow Index, Impact Strength, Heat Deflection, and Diameter Tolerance."
+            config['description'] = config['description'] + "\n\nREQUIRED MATERIAL SPECS: Density, Melt Flow Index, Impact Strength, Heat Deflection, and Diameter Tolerance."
         
         return Task(
             config=config,
@@ -185,7 +214,6 @@ class ECommerceContentCrew:
 
     def create_crew(self, tasks_to_run: list) -> Crew:
         """Створює Crew з послідовним процесом для гарантії Human-in-the-Loop"""
-        # Ensure agents are re-initialized with fresh LLMs for each crew creation
         return Crew(
             agents=[
                 self.web_researcher(),
@@ -223,9 +251,9 @@ class LocalizationCrew:
         return Agent(
             config=agents_config[self.localizer_name],
             tools=agent_tools,
-            # ЗМІНЕНО ТУТ: Використовуємо manager_llm (gpt-4o), 
+            # Використовуємо localizer_llm (gpt-4o), 
             # бо робота з HTML-тегами та мікророзміткою при перекладі потребує високого IQ моделі!
-            llm=manager_llm, 
+            llm=localizer_llm, 
             verbose=True
         )
 

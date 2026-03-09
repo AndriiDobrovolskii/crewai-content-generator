@@ -1,6 +1,7 @@
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 import difflib
+import re
 
 # =====================================================================
 # 1. ІНСТРУМЕНТ ПЕРЕВІРКИ ПЛАГІАТУ (Для Editor QA)
@@ -15,24 +16,35 @@ class ContentSimilarityTool(BaseTool):
     args_schema: type[BaseModel] = SimilarityInput
 
     def _run(self, source_text: str, generated_text: str) -> str:
-        # 1. Захист від того, що LLM передасть None або не рядок
+        # 1. Захист типів (якщо LLM галюцинує і передає dict/list)
         source_text = str(source_text)
         generated_text = str(generated_text)
 
-        # 2. НОРМАЛІЗАЦІЯ: Зводимо до нижнього регістру і прибираємо зайві пробіли/ентери
-        norm_source = " ".join(source_text.lower().split())
-        norm_generated = " ".join(generated_text.lower().split())
-        
-        # 3. Захист від порожніх вхідних даних
-        if not norm_source or not norm_generated:
-            return "FAILED. Uniqueness check failed because one of the input texts is empty."
+        # 2. АНТИ-ІЛЮЗІЯ: Видаляємо всі HTML-теги з тексту.
+        # Інакше наявність <div>, <strong> та <li> штучно завищить "унікальність".
+        clean_source = re.sub(r'<[^>]+>', ' ', source_text)
+        clean_generated = re.sub(r'<[^>]+>', ' ', generated_text)
 
-        # 4. Обчислення на очищених даних
+        # 3. НОРМАЛІЗАЦІЯ: Зводимо до нижнього регістру і прибираємо зайві пробіли/ентери
+        norm_source = " ".join(clean_source.lower().split())
+        norm_generated = " ".join(clean_generated.lower().split())
+        
+        # 4. CPU GUARDRAIL: Обмежуємо довжину тексту для difflib (O(N^2) складність).
+        # 15,000 символів абсолютно достатньо для репрезентативної перевірки на плагіат.
+        norm_source = norm_source[:20000]
+        norm_generated = norm_generated[:20000]
+
+        # 5. Захист від порожніх вхідних даних (або якщо текст складався лише з тегів)
+        if not norm_source or not norm_generated:
+            return "FAILED. Uniqueness check failed because one of the input texts is empty after cleaning."
+
+        # 6. Обчислення схожості
         similarity_ratio = difflib.SequenceMatcher(None, norm_source, norm_generated).ratio()
         uniqueness = (1 - similarity_ratio) * 100
         
+        # 7. Жорсткий контракт відповіді для Editor QA
         if uniqueness < 80:
-            return f"FAILED. Uniqueness is {uniqueness:.2f}%. The text is too similar to the original. Please rewrite."
+            return f"FAILED. Uniqueness is {uniqueness:.2f}%. The text is too similar to the original. You MUST rewrite it."
             
         return f"PASSED. Uniqueness is {uniqueness:.2f}%. The text is sufficiently original."
 
@@ -50,12 +62,12 @@ class USMeasurementCalculatorTool(BaseTool):
     args_schema: type[BaseModel] = ConversionInput
 
     def _run(self, value: float, unit: str) -> str:
-        unit = unit.strip().lower()
+        unit = str(unit).strip().lower()
         
         try:
             val = float(value)
-        except ValueError:
-            return "Error: Please provide a valid number for 'value'."
+        except (ValueError, TypeError):
+            return "Error: Please provide a valid numerical value for conversion."
 
         if unit == 'mm':
             inches = round(val / 25.4, 2)

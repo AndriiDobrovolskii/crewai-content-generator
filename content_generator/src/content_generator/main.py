@@ -3,6 +3,7 @@ import shutil
 import datetime
 import sys
 import io
+import re
 from dotenv import load_dotenv
 
 # Force UTF-8 encoding for stdout/stderr to support Ukrainian characters on Windows
@@ -14,19 +15,26 @@ if sys.stderr.encoding != 'utf-8':
 # Завантажуємо ключі з .env файлу, який лежить у корені
 load_dotenv()
 
-from .tools.parsers import extract_text_from_pdf, extract_text_from_urls
-from .crew import ECommerceContentCrew, LocalizationCrew
+# Додаємо шлях до `src` щоб гарантувати абсолютні імпорти
+# при запуску і через `python main.py` і через `uv run`
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_src_dir = os.path.dirname(_current_dir)  # src/
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
+from content_generator.tools.parsers import extract_text_from_pdf, extract_text_from_urls
+from content_generator.crew import ECommerceContentCrew, LocalizationCrew
 from crewai import Crew, Process
 
 SITES_CONFIG = {
     "3DDevice": {
         "country": "Ukraine", 
-        "languages": ["English", "Ukrainian", "Russian"],
+        "languages":["English", "Ukrainian", "Russian"],
         "localizer": "localizer_ua"
     },
     "3DPrinter": {
         "country": "Ukraine", 
-        "languages": ["English", "Ukrainian", "Russian"],
+        "languages":["English", "Ukrainian", "Russian"],
         "localizer": "localizer_ua"
     },
     "3DScanner": {
@@ -41,7 +49,7 @@ SITES_CONFIG = {
     },
     "EXPERT3D": {
         "country": "Spain", 
-        "languages": ["English", "Spanish (Castilian es-ES)"],
+        "languages":["English", "Spanish (Castilian es-ES)"],
         "localizer": "localizer_es"
     },
     "Expert-3DPrinter": {
@@ -65,7 +73,7 @@ def get_user_input():
     site_choice = input(f"Оберіть сайт (введіть точну назву зі списку): ")
     if site_choice not in SITES_CONFIG:
         print(f"❌ Помилка: Сайт '{site_choice}' не знайдено! Зупинка.")
-        exit(1)
+        sys.exit(1)
 
     print("\nЯке джерело даних використаємо для цього продукту?")
     print("1. Вставити готовий текст")
@@ -79,7 +87,7 @@ def get_user_input():
 
     if data_choice == '1':
         print("Вставте текст (натисніть Enter двічі для завершення):")
-        lines = []
+        lines =[]
         while True:
             line = input()
             if line == "":
@@ -89,7 +97,7 @@ def get_user_input():
         
     elif data_choice == '2':
         urls_input = input("Введіть URL(и) офіційних сторінок/Wiki через кому: ")
-        urls = [url.strip() for url in urls_input.split(",") if url.strip()]
+        urls =[url.strip() for url in urls_input.split(",") if url.strip()]
         print("⏳ Парсимо URL...")
         raw_text = extract_text_from_urls(urls)
         
@@ -115,17 +123,14 @@ def run_pipeline():
     site_info = SITES_CONFIG[target_site]
 
     # --- СТВОРЕННЯ СТРУКТУРИ ПАПОК ---
-    # Генеруємо timestamp: DD-MM-YYYY-H-M
     timestamp = datetime.datetime.now().strftime("%d-%m-%Y-%H-%M")
     
-    # Очищуємо назви від пробілів для безпеки файлової системи
-    safe_site_name = target_site.replace(" ", "_")
-    safe_product_name = product_name.replace(" ", "_")
+    # Очищуємо назви від пробілів та заборонених символів Windows
+    _invalid_chars = r'[\\/:*?"<>|()]'
+    safe_site_name = re.sub(_invalid_chars, '', target_site).replace(' ', '_')
+    safe_product_name = re.sub(_invalid_chars, '', product_name).replace(' ', '_')
     
-    # Формуємо назву папки: назва-сайту-назва-товару-timestamp
     folder_name = f"{safe_site_name}-{safe_product_name}-{timestamp}"
-    
-    # Повний шлях до папки виводу: output/folder_name
     output_dir = os.path.join("output", folder_name)
     os.makedirs(output_dir, exist_ok=True)
     
@@ -134,9 +139,9 @@ def run_pipeline():
     core_inputs = {
         'product_name': product_name,
         'site_name': target_site,
-        'target_country': site_info['country'],
+        'target_country': "Global Market (USA/UK)", # Жорстка англійська база
         'raw_source_text': raw_text,
-        'language_instruction': "IMPORTANT: You MUST generate all content in Phase 1 (Marketing Copy, Specs, HTML) strictly in ENGLISH. Transcreation should happen only in Phase 2."
+        'language_instruction': "CRITICAL SYSTEM DIRECTIVE: Regardless of the language of the source text, YOU MUST OUTPUT 100% OF YOUR RESPONSE IN ENGLISH. Do not translate SEO keywords to Spanish/Ukrainian. Everything MUST be in English."
     }
 
     print("\n" + "="*60)
@@ -154,10 +159,9 @@ def run_pipeline():
         input("Press ENTER to authorize the search and extraction for PHASE 1... ")
         print("!"*60 + "\n")
         
-       # Phase 1: Research and Core Content
-    # We pass 'product_name' to dynamic task methods
-        tasks_to_run = [
-            core_crew_module.source_research_task(product_name),
+        tasks_to_run =[
+            core_crew_module.url_discovery_task(product_name),
+            core_crew_module.content_extraction_task(product_name),
             core_crew_module.tech_specs_extraction_task(product_name),
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
@@ -166,7 +170,7 @@ def run_pipeline():
         ]
     else:
         print(f"✅ Знайдено {len(raw_text)} символів сирого тексту. Пропускаємо етап пошуку!")
-        tasks_to_run = [
+        tasks_to_run =[
             core_crew_module.tech_specs_extraction_task(product_name),
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
@@ -201,8 +205,7 @@ def run_pipeline():
         
         loc_result = loc_crew.kickoff(inputs=localization_inputs)
         
-        # Формуємо назву файлу: folder_name_Language.html (щоб відповідати структурі)
-        safe_lang = language.split(" ")[0] # Беремо перше слово (напр. "Spanish" з "Spanish (Castilian)")
+        safe_lang = language.split(" ")[0] 
         filename = f"{folder_name}_{safe_lang}.html"
         file_path = os.path.join(output_dir, filename)
         
@@ -213,25 +216,86 @@ def run_pipeline():
 
     # --- АРХІВАЦІЯ (ZIP) ---
     print("\n📦 Створення ZIP-архіву...")
-    
-    # Створюємо архів у папці output (поруч з папкою проєкту)
-    # base_name - це шлях + назва архіву (без .zip)
     zip_base_name = os.path.join("output", folder_name)
-    
-    # root_dir - яку папку архівуємо
     shutil.make_archive(zip_base_name, 'zip', output_dir)
     
-    # Переміщуємо архів ВСЕРЕДИНУ створеної папки (як ви просили)
-    # З: output/folder.zip -> В: output/folder/folder.zip
     src_zip = f"{zip_base_name}.zip"
     dst_zip = os.path.join(output_dir, f"{folder_name}.zip")
     shutil.move(src_zip, dst_zip)
 
     print(f"🎉 Готово! Всі файли та архів знаходяться тут:\n   👉 {output_dir}")
 
+
+def train_pipeline():
+    """Ізольований режим тренування для Core Crew (Фаза 1)"""
+    print("\n" + "="*60)
+    print("🏋️ ІНІЦІАЛІЗАЦІЯ РЕЖИМУ ТРЕНУВАННЯ (TRAINING MODE) 🏋️")
+    print("="*60)
+    print("УВАГА: Тренування вимагає вашого зворотного зв'язку на кожній ітерації.")
+    print("Система згенерує результат, запитає вашу критику, і на її основі")
+    print("оптимізує свою поведінку для наступної ітерації.\n")
+
+    try:
+        n_iterations = int(input("Введіть кількість ітерацій тренування (рекомендовано 2-3): ") or 2)
+    except ValueError:
+        n_iterations = 2
+
+    filename = input("Введіть назву файлу для збереження моделі (напр. core_crew_model.pkl): ") or "core_crew_model.pkl"
+
+    product_name, target_site, raw_text, use_auto_search = get_user_input()
+    
+    # Захист від порожнього контексту під час тренування
+    if not raw_text and use_auto_search:
+        print("\n❌[ФАТАЛЬНА ПОМИЛКА]: Режим тренування вимагає статичного тексту. Ви не можете використовувати 'Автоматичний пошук' (Опція 4) під час тренування, оскільки агенти не зможуть порівнювати результати ітерацій між собою через зміну вхідних даних. Будь ласка, перезапустіть і оберіть Опцію 1, 2 або 3.")
+        sys.exit(1)
+
+    core_inputs = {
+        'product_name': product_name,
+        'site_name': target_site,
+        'target_country': "Global Market (USA/UK)", 
+        'raw_source_text': raw_text,
+        'language_instruction': "CRITICAL SYSTEM DIRECTIVE: YOU MUST OUTPUT 100% OF YOUR RESPONSE IN ENGLISH."
+    }
+
+    core_crew_module = ECommerceContentCrew()
+    
+    print("\n[АУДИТ]: Переводимо систему в режим тренування на основі наданого тексту...")
+    tasks_to_run =[
+        core_crew_module.tech_specs_extraction_task(product_name),
+        core_crew_module.seo_strategy_task(),
+        core_crew_module.copywriting_task(),
+        core_crew_module.quality_assurance_task(),
+        core_crew_module.html_integration_task()
+    ]
+
+    active_core_crew = core_crew_module.create_crew(tasks_to_run)
+
+    print(f"\n⏳ Запуск тренування ({n_iterations} ітерацій). Будьте готові надавати фідбек...")
+    
+    active_core_crew.train(
+        n_iterations=n_iterations, 
+        filename=filename, 
+        inputs=core_inputs
+    )
+    
+    print(f"\n🎉 Тренування успішно завершено! Дані збережено у файл: {filename}")
+
+
 def run():
-    """Entry point for the crew"""
+    """Стандартний режим генерації"""
     run_pipeline()
 
+
 if __name__ == "__main__":
-    run()
+    print("\n" + "!"*60)
+    print("ОБЕРІТЬ РЕЖИМ ЗАПУСКУ СИСТЕМИ")
+    print("!"*60)
+    print("1. 🚀 PRODUCTION MODE (Стандартна генерація + Локалізація)")
+    print("2. 🏋️ TRAINING MODE (Тренування базової команди з Human Feedback)")
+    
+    mode = input("Ваш вибір (1 або 2): ")
+    
+    if mode == '2':
+        train_pipeline()
+    else:
+        run()
