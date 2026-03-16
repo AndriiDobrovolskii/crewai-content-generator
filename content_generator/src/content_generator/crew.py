@@ -145,6 +145,14 @@ class QAVerdict(BaseModel):
         default=None,
         description="The final vetted English text. Populated ONLY if status is APPROVED."
     )
+    expert_insight_present: bool = Field(
+        default=False,
+        description="Whether an Expert Verdict block with at least one cited metric is present."
+    )
+    technical_tip_present: bool = Field(
+        default=False,
+        description="Whether a practitioner-level Technical Tip blockquote is present."
+    )
 
 
 # =====================================================================

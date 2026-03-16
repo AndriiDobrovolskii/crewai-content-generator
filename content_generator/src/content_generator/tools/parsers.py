@@ -1,8 +1,11 @@
 """
-Parsers for Content Extraction Pipeline v2.1
+Parsers for Content Extraction Pipeline v2.2
 
 Каскадний парсинг: Requests + BS4 → Selenium.
 Кожен метод зберігає зображення та відео як текстові маркери для LLM.
+
+Ключові зміни v2.2:
+- Multi-PDF: extract_text_from_pdfs() — batch обробка кількох PDF з маркерами джерел
 
 Ключові зміни v2.1:
 - Firecrawl ВИДАЛЕНО (не використовується)
@@ -183,6 +186,34 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception as e:
         print(f"   ❌ Gemini не впорався: {e}")
         return f"[ПОМИЛКА] Не вдалося витягнути текст з PDF жодним методом. Остання помилка: {e}"
+
+
+def extract_text_from_pdfs(pdf_paths: list) -> str:
+    """
+    Каскадне витягнення тексту з КІЛЬКОХ PDF файлів.
+    Дзеркалює патерн extract_text_from_urls(): список входів → per-file обробка → конкатенація.
+    """
+    if not pdf_paths:
+        return "[ПОМИЛКА] Список PDF файлів порожній."
+
+    combined_parts = []
+
+    for pdf_path in pdf_paths:
+        pdf_path = pdf_path.strip()
+        if not pdf_path:
+            continue
+
+        print(f"\n⏳ Обробка PDF: {pdf_path}")
+        page_text = extract_text_from_pdf(pdf_path)
+        filename = os.path.basename(pdf_path)
+        combined_parts.append(f"\n--- Джерело: {filename} ---\n{page_text}")
+
+    if not combined_parts:
+        return "[ПОМИЛКА] Жоден PDF не дав результату."
+
+    result = "\n".join(combined_parts)
+    print(f"\n📊 Підсумок: оброблено {len(pdf_paths)} PDF, загалом {len(result)} символів.")
+    return result
 
 
 # =====================================================================
