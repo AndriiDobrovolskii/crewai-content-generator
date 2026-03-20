@@ -1,8 +1,14 @@
 """
-Parsers for Content Extraction Pipeline v2.2
+Parsers for Content Extraction Pipeline v2.3
 
 Каскадний парсинг: Requests + BS4 → Selenium.
 Кожен метод зберігає зображення та відео як текстові маркери для LLM.
+
+Ключові зміни v2.3:
+- Markdown ingestion: extract_text_from_md() — single file з front matter extraction
+- Markdown directory: extract_text_from_md_dir() — рекурсивний скан з exclude-паттернами
+- YAML front matter → структурований префікс для tech_specs_analyst
+- Markdown normalization: headers → рівневі маркери, syntax stripping, table preservation
 
 Ключові зміни v2.2:
 - Multi-PDF: extract_text_from_pdfs() — batch обробка кількох PDF з маркерами джерел
@@ -17,7 +23,9 @@ Parsers for Content Extraction Pipeline v2.2
 
 import os
 import re
+import glob
 import logging
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 from pathlib import PurePosixPath
 
@@ -31,6 +39,12 @@ try:
     import PyPDF2
 except ImportError:
     PyPDF2 = None
+
+# Markdown: PyYAML (для front matter extraction)
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 # =====================================================================
@@ -213,6 +227,274 @@ def extract_text_from_pdfs(pdf_paths: list) -> str:
 
     result = "\n".join(combined_parts)
     print(f"\n📊 Підсумок: оброблено {len(pdf_paths)} PDF, загалом {len(result)} символів.")
+    return result
+
+
+# =====================================================================
+# 📝 MARKDOWN EXTRACTION
+# =====================================================================
+# Контракт дзеркалює PDF/URL парсери:
+# - extract_text_from_md()     → один файл
+# - extract_text_from_md_dir() → рекурсивний batch з маркерами джерел
+#
+# Markdown — вже структурований текст, каскад методів не потрібен.
+# Критичні точки: front matter extraction, syntax normalization,
+# table preservation (LLM читає pipe tables нативно).
+# =====================================================================
+
+# Файли, які за замовчуванням виключаються з рекурсивного сканування
+DEFAULT_MD_EXCLUDES = [
+    'README.md', 'CHANGELOG.md', 'LICENSE.md', 'CONTRIBUTING.md',
+    'CODE_OF_CONDUCT.md', 'SECURITY.md',
+]
+
+# Regex для YAML front matter: --- на початку файлу ... ---
+_FRONT_MATTER_RE = re.compile(
+    r'\A---[ \t]*\n(.*?\n)---[ \t]*\n',
+    re.DOTALL
+)
+
+# Markdown syntax patterns для нормалізації
+_MD_HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+_MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*|__(.+?)__')
+_MD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)')
+_MD_STRIKE_RE = re.compile(r'~~(.+?)~~')
+_MD_CODE_INLINE_RE = re.compile(r'`([^`]+)`')
+_MD_LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+_MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+_MD_CODE_BLOCK_RE = re.compile(r'```[\w]*\n(.*?)```', re.DOTALL)
+_MD_BLOCKQUOTE_RE = re.compile(r'^>\s?', re.MULTILINE)
+_MD_HR_RE = re.compile(r'^[-*_]{3,}\s*$', re.MULTILINE)
+
+
+def _extract_front_matter(raw_text: str) -> tuple[Optional[dict], str]:
+    """
+    Витягує YAML front matter з початку MD-файлу.
+    Defensive: якщо YAML не парситься або PyYAML відсутній — повертає None без crash.
+    
+    Returns:
+        (metadata_dict | None, body_text_without_front_matter)
+    """
+    match = _FRONT_MATTER_RE.match(raw_text)
+    if not match:
+        return None, raw_text
+
+    yaml_block = match.group(1)
+    body = raw_text[match.end():]
+
+    if yaml is None:
+        logger.warning("PyYAML не встановлено — front matter буде проігноровано.")
+        return None, body
+
+    try:
+        metadata = yaml.safe_load(yaml_block)
+        if not isinstance(metadata, dict):
+            # YAML парситься, але це не dict (наприклад, просто рядок)
+            logger.warning(f"Front matter не є dict (тип: {type(metadata).__name__}), ігноруємо.")
+            return None, body
+        return metadata, body
+    except yaml.YAMLError as e:
+        logger.warning(f"Невалідний YAML front matter: {e}")
+        return None, body
+
+
+def _format_front_matter_prefix(metadata: dict) -> str:
+    """
+    Форматує front matter як структурований текстовий блок.
+    Інжектується на початку raw_source_text — дає tech_specs_analyst безкоштовний контекст.
+    """
+    lines = ["--- Front Matter Metadata ---"]
+    # Пріоритетні ключі (якщо є — виводимо першими)
+    priority_keys = ['title', 'brand', 'category', 'model', 'sku', 'tags']
+    seen = set()
+    for key in priority_keys:
+        if key in metadata:
+            val = metadata[key]
+            # tags/list → comma-separated
+            if isinstance(val, list):
+                val = ', '.join(str(v) for v in val)
+            lines.append(f"{key.capitalize()}: {val}")
+            seen.add(key)
+
+    # Решта ключів (алфавітно)
+    for key in sorted(metadata.keys()):
+        if key not in seen:
+            val = metadata[key]
+            if isinstance(val, list):
+                val = ', '.join(str(v) for v in val)
+            lines.append(f"{key.capitalize()}: {val}")
+
+    lines.append("--- End Front Matter ---\n")
+    return "\n".join(lines)
+
+
+def _normalize_markdown(body: str) -> str:
+    """
+    Конвертує Markdown-синтаксис у LLM-friendly plain text.
+    
+    Принципи:
+    - Заголовки → рівневі маркери (аналітик бачить ієрархію)
+    - Таблиці → залишаємо as-is (LLM парсить pipe tables нативно)
+    - Bold/italic/strike → strip синтаксис, зберегти текст
+    - Посилання → "text (url)"
+    - Code blocks → зберегти вміст, прибрати огорожу
+    """
+    text = body
+
+    # 1. Code blocks (до інших замін, щоб не зачіпати вміст блоків)
+    text = _MD_CODE_BLOCK_RE.sub(r'\1', text)
+
+    # 2. Зображення → MAS Protocol маркер [OFFICIAL_IMAGE: ...]
+    #    (у поточному сценарії зображень немає, але підтримка на майбутнє)
+    def _image_to_marker(m):
+        alt = m.group(1).strip() or 'Product Image'
+        url = m.group(2).strip()
+        return f"\n[OFFICIAL_IMAGE: url='{url}', alt='{alt}']\n"
+    text = _MD_IMAGE_RE.sub(_image_to_marker, text)
+
+    # 3. Посилання → "text (url)"
+    text = _MD_LINK_RE.sub(r'\1 (\2)', text)
+
+    # 4. Заголовки → рівневі маркери
+    def _heading_to_marker(m):
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        return f"\n=== HEADING LEVEL {level}: {title} ===\n"
+    text = _MD_HEADING_RE.sub(_heading_to_marker, text)
+
+    # 5. Bold / Italic / Strikethrough → plain text
+    text = _MD_BOLD_RE.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _MD_ITALIC_RE.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _MD_STRIKE_RE.sub(r'\1', text)
+
+    # 6. Inline code → plain text
+    text = _MD_CODE_INLINE_RE.sub(r'\1', text)
+
+    # 7. Blockquotes → strip '>' prefix
+    text = _MD_BLOCKQUOTE_RE.sub('', text)
+
+    # 8. Horizontal rules → visual separator
+    text = _MD_HR_RE.sub('\n---\n', text)
+
+    # 9. Нормалізуємо зайві порожні рядки (max 2 підряд)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
+def extract_text_from_md(md_path: str) -> str:
+    """
+    Витягнення тексту з одного Markdown файлу.
+    
+    Pipeline:
+    1. Validate & read UTF-8
+    2. Extract YAML front matter (якщо є) → structured prefix
+    3. Normalize Markdown syntax → LLM-friendly plain text
+    4. Concatenate prefix + body
+    """
+    if not os.path.isfile(md_path):
+        return f"[ПОМИЛКА] Файл не знайдено: {md_path}"
+
+    file_size_kb = os.path.getsize(md_path) / 1024
+    print(f"\n📝 MD: {os.path.basename(md_path)} ({file_size_kb:.1f} KB)")
+
+    # --- Read ---
+    try:
+        with open(md_path, 'r', encoding='utf-8') as f:
+            raw_content = f.read()
+    except UnicodeDecodeError:
+        # Fallback для файлів без BOM або у Windows-кодуванні
+        try:
+            with open(md_path, 'r', encoding='utf-8-sig') as f:
+                raw_content = f.read()
+        except Exception as e:
+            return f"[ПОМИЛКА] Не вдалося прочитати MD файл ({e}): {md_path}"
+
+    if not raw_content.strip():
+        return f"[ПОМИЛКА] MD файл порожній: {md_path}"
+
+    # --- Front Matter ---
+    metadata, body = _extract_front_matter(raw_content)
+
+    parts = []
+    if metadata:
+        prefix = _format_front_matter_prefix(metadata)
+        parts.append(prefix)
+        fm_keys = list(metadata.keys())
+        print(f"   📋 Front matter знайдено: {', '.join(fm_keys)}")
+    else:
+        print("   ℹ️ Front matter відсутній.")
+
+    # --- Normalize ---
+    normalized = _normalize_markdown(body)
+    parts.append(normalized)
+
+    result = "\n".join(parts)
+    print(f"   ✅ Успішно — {len(result)} символів.")
+    return result
+
+
+def extract_text_from_md_dir(
+    dir_path: str,
+    exclude_patterns: Optional[list] = None
+) -> str:
+    """
+    Рекурсивне витягнення тексту з директорії Markdown файлів.
+    Дзеркалює патерн extract_text_from_pdfs(): per-file обробка → конкатенація з маркерами джерел.
+    
+    Args:
+        dir_path: Шлях до кореневої директорії
+        exclude_patterns: Список glob-паттернів або імен файлів для виключення.
+                          За замовчуванням: README.md, CHANGELOG.md, LICENSE.md і т.д.
+    """
+    if not os.path.isdir(dir_path):
+        return f"[ПОМИЛКА] Директорію не знайдено: {dir_path}"
+
+    # Збираємо всі .md файли рекурсивно
+    pattern = os.path.join(dir_path, '**', '*.md')
+    all_md_files = glob.glob(pattern, recursive=True)
+
+    if not all_md_files:
+        return f"[ПОМИЛКА] У директорії не знайдено .md файлів: {dir_path}"
+
+    # Формуємо exclude set
+    excludes = set(exclude_patterns or DEFAULT_MD_EXCLUDES)
+
+    # Фільтрація: виключаємо за ім'ям файлу або за glob-паттерном
+    filtered_files = []
+    for filepath in all_md_files:
+        filename = os.path.basename(filepath)
+        if filename in excludes:
+            print(f"   ⏩ Пропущено (exclude): {filename}")
+            continue
+        # Додаткова перевірка: node_modules, .git, __pycache__
+        rel_path = os.path.relpath(filepath, dir_path)
+        skip_dirs = {'node_modules', '.git', '__pycache__', '.venv', 'venv'}
+        if any(part in skip_dirs for part in rel_path.split(os.sep)):
+            print(f"   ⏩ Пропущено (системна директорія): {rel_path}")
+            continue
+        filtered_files.append(filepath)
+
+    if not filtered_files:
+        return f"[ПОМИЛКА] Усі .md файли виключено фільтрами: {dir_path}"
+
+    # Сортуємо для детермінованого порядку
+    filtered_files.sort()
+
+    print(f"\n📂 Знайдено {len(filtered_files)} MD файлів у {dir_path}")
+
+    combined_parts = []
+    for md_path in filtered_files:
+        rel_name = os.path.relpath(md_path, dir_path)
+        print(f"\n⏳ Обробка MD: {rel_name}")
+        page_text = extract_text_from_md(md_path)
+        combined_parts.append(f"\n--- Джерело: {rel_name} ---\n{page_text}")
+
+    if not combined_parts:
+        return "[ПОМИЛКА] Жоден MD файл не дав результату."
+
+    result = "\n".join(combined_parts)
+    print(f"\n📊 Підсумок: оброблено {len(filtered_files)} MD, загалом {len(result)} символів.")
     return result
 
 

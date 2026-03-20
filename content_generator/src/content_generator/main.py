@@ -20,7 +20,10 @@ _src_dir = os.path.dirname(_current_dir)
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from content_generator.tools.parsers import extract_text_from_pdf, extract_text_from_urls
+from content_generator.tools.parsers import (
+    extract_text_from_pdf, extract_text_from_urls,
+    extract_text_from_md, extract_text_from_md_dir,
+)
 from content_generator.crew import ECommerceContentCrew, LocalizationCrew, SITES_CONFIG, CTA_TEMPLATES
 
 
@@ -69,8 +72,10 @@ def get_user_input():
     print("  2. Вказати URL-адреси (через кому)")
     print("  3. Завантажити PDF (вказати шлях)")
     print("  4. Автоматичний пошук (агент шукатиме в Google)")
+    print("  5. Markdown файл (вказати шлях)")
+    print("  6. Директорія Markdown файлів (рекурсивний скан)")
 
-    data_choice = input("Оберіть варіант (1-4): ")
+    data_choice = input("Оберіть варіант (1-6): ")
     raw_text = ""
     use_auto_search = False
 
@@ -98,6 +103,22 @@ def get_user_input():
     elif data_choice == '4':
         use_auto_search = True
         print("🤖 Агент Web Researcher сам шукатиме інформацію в мережі.")
+
+    elif data_choice == '5':
+        md_path = input("Введіть повний шлях до Markdown файлу: ")
+        print("⏳ Читаємо Markdown...")
+        raw_text = extract_text_from_md(md_path)
+
+    elif data_choice == '6':
+        md_dir = input("Введіть шлях до директорії з Markdown файлами: ")
+        exclude_input = input(
+            "Виключити файли (через кому, або Enter для стандартних): "
+        ).strip()
+        exclude_patterns = None
+        if exclude_input:
+            exclude_patterns = [p.strip() for p in exclude_input.split(",") if p.strip()]
+        print("⏳ Скануємо директорію Markdown файлів...")
+        raw_text = extract_text_from_md_dir(md_dir, exclude_patterns=exclude_patterns)
 
     else:
         print("⚠️ Невірний вибір. Використовуємо автоматичний пошук.")
@@ -305,7 +326,7 @@ def train_pipeline():
             "\n❌ [ФАТАЛЬНА ПОМИЛКА]: Режим тренування вимагає статичного тексту.\n"
             "   Ви не можете використовувати 'Автоматичний пошук' (Опція 4),\n"
             "   оскільки вхідні дані змінюватимуться між ітераціями.\n"
-            "   Перезапустіть і оберіть Опцію 1, 2 або 3."
+            "   Перезапустіть і оберіть Опцію 1, 2, 3, 5 або 6."
         )
         sys.exit(1)
 
