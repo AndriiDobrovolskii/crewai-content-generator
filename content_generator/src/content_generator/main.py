@@ -39,6 +39,15 @@ def _sanitize_name(name: str) -> str:
     return re.sub(_INVALID_CHARS, '', name).replace(' ', '_')
 
 
+def _clean_llm_html(content: str) -> str:
+    """Видаляє markdown-огорожі коду з виводу LLM."""
+    content = content.strip()
+    content = re.sub(r'^```html\s*', '', content, flags=re.IGNORECASE)
+    content = re.sub(r'^```\s*', '', content, flags=re.IGNORECASE)
+    content = re.sub(r'\s*```$', '', content)
+    return content.strip()
+
+
 def _save_html(output_dir: str, filename: str, html_content: str) -> str:
     """Зберігає HTML-файл і повертає повний шлях."""
     filepath = os.path.join(output_dir, filename)
@@ -206,7 +215,7 @@ def run_pipeline():
 
     active_core_crew = core_crew_module.create_crew(tasks_to_run)
     core_result = active_core_crew.kickoff(inputs=core_inputs)
-    base_english_html = core_result.raw
+    base_english_html = _clean_llm_html(core_result.raw)
 
     # Зберігаємо англійську базу (завжди корисно мати оригінал)
     _save_html(output_dir, f"{folder_name}_BASE_English.html", base_english_html)
@@ -250,7 +259,7 @@ def run_pipeline():
     )
     ua_result = ua_crew.kickoff(inputs=ua_inputs)
 
-    _save_html(output_dir, ua_filename, ua_result.raw)
+    _save_html(output_dir, ua_filename, _clean_llm_html(ua_result.raw))
     print(f"💾 [{ua_label}] Збережено: {ua_filename}")
 
     # -----------------------------------------------------------------
@@ -280,7 +289,7 @@ def run_pipeline():
 
         safe_lang = language.split(" ")[0]
         filename = f"{folder_name}_{safe_lang}.html"
-        _save_html(output_dir, filename, loc_result.raw)
+        _save_html(output_dir, filename, _clean_llm_html(loc_result.raw))
         print(f"  💾 Збережено: {filename}")
 
     # -----------------------------------------------------------------

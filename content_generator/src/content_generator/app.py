@@ -393,10 +393,38 @@ def index() -> rx.Component:
                         rx.foreach(
                             AppState.generated_results.keys(),
                             lambda lang: rx.tabs.content(
-                                rx.code_block(
-                                    AppState.generated_results[lang],
-                                    language="html",
-                                    show_line_numbers=True,
+                                rx.tabs.root(
+                                    rx.tabs.list(
+                                        rx.tabs.trigger("Код", value="code"),
+                                        rx.tabs.trigger("Перегляд", value="preview"),
+                                    ),
+                                    rx.tabs.content(
+                                        rx.code_block(
+                                            AppState.generated_results[lang],
+                                            language="html",
+                                            show_line_numbers=True,
+                                        ),
+                                        value="code",
+                                    ),
+                                    rx.tabs.content(
+                                        rx.box(
+                                            rx.el.iframe(
+                                                srcdoc=AppState.generated_results[lang],
+                                                style={
+                                                    "background": "transparent",
+                                                    "border": "none",
+                                                    "width": "100%",
+                                                    "height": "100%",
+                                                },
+                                                sandbox="allow-same-origin allow-scripts",
+                                            ),
+                                            width="100%",
+                                            height="600px",
+                                        ),
+                                        value="preview",
+                                    ),
+                                    default_value="code",
+                                    width="100%",
                                 ),
                                 value=lang,
                             ),
