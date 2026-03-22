@@ -34,7 +34,7 @@ with open(tasks_config_path, 'r', encoding='utf-8') as f:
 # - gpt-4o: копірайтинг, SEO, HTML, локалізація (висока точність)
 
 researcher_llm = LLM(model=os.getenv("RESEARCHER_MODEL", "gpt-4o-mini"))
-analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gemini/gemini-1.5-pro"))
+analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gpt-4o"))
 writer_llm = LLM(model=os.getenv("WRITER_MODEL", "gpt-4o"))
 frontend_llm = LLM(model=os.getenv("FRONTEND_MODEL", "gpt-4o"))
 localizer_llm = LLM(model=os.getenv("LOCALIZER_MODEL", "gpt-4o"))
@@ -490,7 +490,7 @@ class ECommerceContentCrew:
         self._tasks['html'] = task
         return task
 
-    def create_crew(self, tasks_to_run: list) -> Crew:
+    def create_crew(self, tasks_to_run: list, task_callback=None) -> Crew:
         """Створює Crew з послідовним процесом."""
         # Збираємо унікальних агентів з задач (без дублікатів)
         unique_agents = []
@@ -507,7 +507,8 @@ class ECommerceContentCrew:
             process=Process.sequential,
             memory=True,
             cache=True,
-            verbose=True
+            verbose=True,
+            task_callback=task_callback,
         )
 
 
@@ -558,14 +559,15 @@ class LocalizationCrew:
             agent=self._localizer
         )
 
-    def crew(self) -> Crew:
+    def crew(self, task_callback=None) -> Crew:
         return Crew(
             agents=[self._localizer],
             tasks=[self.localization_task()],
             process=Process.sequential,
             memory=True,
             cache=True,
-            verbose=True
+            verbose=True,
+            task_callback=task_callback,
         )
 
     def get_inputs(self, product_name: str, site_name: str,
