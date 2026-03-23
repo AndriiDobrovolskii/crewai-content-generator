@@ -22,7 +22,7 @@ if _src_dir not in sys.path:
 
 from content_generator.tools.parsers import (
     extract_text_from_pdf, extract_text_from_urls,
-    extract_text_from_md, extract_text_from_md_dir,
+    extract_text_from_md, extract_text_from_mds, extract_text_from_md_dir,
 )
 from content_generator.crew import ECommerceContentCrew, LocalizationCrew, SITES_CONFIG, CTA_TEMPLATES
 
@@ -37,15 +37,6 @@ _INVALID_CHARS = r'[\\/:*?"<>|()]'
 def _sanitize_name(name: str) -> str:
     """Очищує назву від пробілів та заборонених символів Windows."""
     return re.sub(_INVALID_CHARS, '', name).replace(' ', '_')
-
-
-def _clean_llm_html(content: str) -> str:
-    """Видаляє markdown-огорожі коду з виводу LLM."""
-    content = content.strip()
-    content = re.sub(r'^```html\s*', '', content, flags=re.IGNORECASE)
-    content = re.sub(r'^```\s*', '', content, flags=re.IGNORECASE)
-    content = re.sub(r'\s*```$', '', content)
-    return content.strip()
 
 
 def _save_html(output_dir: str, filename: str, html_content: str) -> str:
@@ -114,9 +105,14 @@ def get_user_input():
         print("🤖 Агент Web Researcher сам шукатиме інформацію в мережі.")
 
     elif data_choice == '5':
-        md_path = input("Введіть повний шлях до Markdown файлу: ")
-        print("⏳ Читаємо Markdown...")
-        raw_text = extract_text_from_md(md_path)
+        md_input = input("Введіть шлях(и) до Markdown файл(ів) (через кому): ")
+        md_paths = [p.strip() for p in md_input.split(",") if p.strip()]
+        if len(md_paths) == 1:
+            print("⏳ Читаємо Markdown...")
+            raw_text = extract_text_from_md(md_paths[0])
+        else:
+            print(f"⏳ Читаємо {len(md_paths)} Markdown файлів...")
+            raw_text = extract_text_from_mds(md_paths)
 
     elif data_choice == '6':
         md_dir = input("Введіть шлях до директорії з Markdown файлами: ")
@@ -153,6 +149,12 @@ def run_pipeline():
     output_dir = os.path.join("output", folder_name)
     os.makedirs(output_dir, exist_ok=True)
     print(f"\n📂 Папка результатів: {output_dir}")
+
+    # Guard: парсер повернув помилку — зупинити pipeline до виклику CrewAI
+    if not use_auto_search and raw_text.lstrip().startswith("[ПОМИЛКА]"):
+        print(f"\n❌ {raw_text.strip()}")
+        print("Виправте шляхи до файлів і запустіть повторно.")
+        sys.exit(1)
 
     # 3. Формуємо CTA контекст для копірайтера
     cta_data = CTA_TEMPLATES.get(target_site, {})
@@ -215,7 +217,7 @@ def run_pipeline():
 
     active_core_crew = core_crew_module.create_crew(tasks_to_run)
     core_result = active_core_crew.kickoff(inputs=core_inputs)
-    base_english_html = _clean_llm_html(core_result.raw)
+    base_english_html = core_result.raw
 
     # Зберігаємо англійську базу (завжди корисно мати оригінал)
     _save_html(output_dir, f"{folder_name}_BASE_English.html", base_english_html)
@@ -259,7 +261,7 @@ def run_pipeline():
     )
     ua_result = ua_crew.kickoff(inputs=ua_inputs)
 
-    _save_html(output_dir, ua_filename, _clean_llm_html(ua_result.raw))
+    _save_html(output_dir, ua_filename, ua_result.raw)
     print(f"💾 [{ua_label}] Збережено: {ua_filename}")
 
     # -----------------------------------------------------------------
@@ -289,7 +291,7 @@ def run_pipeline():
 
         safe_lang = language.split(" ")[0]
         filename = f"{folder_name}_{safe_lang}.html"
-        _save_html(output_dir, filename, _clean_llm_html(loc_result.raw))
+        _save_html(output_dir, filename, loc_result.raw)
         print(f"  💾 Збережено: {filename}")
 
     # -----------------------------------------------------------------

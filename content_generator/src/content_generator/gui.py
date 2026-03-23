@@ -5,6 +5,11 @@
     python src/content_generator/gui.py
 
 Потребує: gradio>=4.0  (uv add gradio)
+
+Зміни v2:
+- File Explorer: gr.File для PDF та Markdown (вибір файлів через діалог ОС)
+- Автоматичне перемикання між текстовим вводом і файловим вибором
+- Multi-file підтримка: кілька PDF або MD файлів за раз
 """
 
 import os
@@ -42,18 +47,31 @@ SITE_CHOICES: list[str] = list(SITE_LABELS.keys())
 SOURCE_MAP: dict[str, str] = {
     "📝 Вставити текст": "text",
     "🌐 URL-адреси (через кому)": "urls",
-    "📄 PDF файл (шлях до файлу)": "pdf",
-    "📑 Markdown файл (шлях)": "markdown",
+    "📄 PDF файл(и)": "pdf",
+    "📑 Markdown файл(и)": "markdown",
     "📁 Директорія Markdown (шлях)": "markdown_dir",
 }
 SOURCE_CHOICES: list[str] = list(SOURCE_MAP.keys())
 
+# Джерела, для яких показуємо file picker замість textbox
+_FILE_PICKER_SOURCES = {"pdf", "markdown"}
+
 INPUT_PLACEHOLDERS: dict[str, str] = {
     "📝 Вставити текст": "Вставте сирий текст про продукт (технічні характеристики, опис, FAQ)...",
     "🌐 URL-адреси (через кому)": "https://example.com/product, https://store.com/item",
-    "📄 PDF файл (шлях до файлу)": r"C:\Documents\product_datasheet.pdf",
-    "📑 Markdown файл (шлях)": r"C:\docs\product.md",
+    "📄 PDF файл(и)": r"Або вставте шлях(и) через кому: C:\docs\file1.pdf, C:\docs\file2.pdf",
+    "📑 Markdown файл(и)": r"Або вставте шлях(и) через кому: C:\docs\spec.md, C:\docs\manual.md",
     "📁 Директорія Markdown (шлях)": r"C:\docs\product_folder",
+}
+
+FILE_PICKER_LABELS: dict[str, str] = {
+    "pdf": "📄 Оберіть PDF файл(и)",
+    "markdown": "📑 Оберіть Markdown файл(и)",
+}
+
+FILE_PICKER_TYPES: dict[str, list[str]] = {
+    "pdf": [".pdf"],
+    "markdown": [".md", ".markdown"],
 }
 
 CSS = """
@@ -90,14 +108,62 @@ CSS = """
 /* Статус-бейдж */
 .status-ready { color: #16a34a; font-weight: 600; }
 .status-working { color: #d97706; font-weight: 600; }
+
+/* Роздільник OR */
+.or-divider { text-align: center; color: #9ca3af; font-size: 0.82rem; margin: 0.3rem 0; }
 """
 
 
 # ── Обробники подій ───────────────────────────────────────────────────────────
 
-def on_source_change(source_label: str) -> dict:
-    """Оновлює placeholder поля вводу при зміні типу джерела."""
-    return gr.update(placeholder=INPUT_PLACEHOLDERS.get(source_label, ""))
+def on_source_change(source_label: str):
+    """Перемикає видимість: textbox ↔ file picker залежно від джерела."""
+    source_type = SOURCE_MAP.get(source_label, "text")
+    use_picker = source_type in _FILE_PICKER_SOURCES
+
+    # Textbox: завжди видимий, але менший коли є picker
+    textbox_update = gr.update(
+        placeholder=INPUT_PLACEHOLDERS.get(source_label, ""),
+        visible=True,
+        lines=2 if use_picker else 10,
+        label="Або вставте шлях(и) вручну" if use_picker else "Вхідні дані",
+    )
+
+    # File picker: видимий тільки для pdf / markdown
+    picker_update = gr.update(
+        visible=use_picker,
+        label=FILE_PICKER_LABELS.get(source_type, "Оберіть файли"),
+        file_types=FILE_PICKER_TYPES.get(source_type, None),
+        value=None,
+    )
+
+    # OR-розділювач між picker і textbox
+    or_update = gr.update(visible=use_picker)
+
+    return textbox_update, picker_update, or_update
+
+
+def _resolve_raw_input(
+    source_label: str,
+    raw_input: str,
+    uploaded_files: list | None,
+) -> str:
+    """Формує фінальний raw_input: пріоритет — file picker, fallback — textbox."""
+    source_type = SOURCE_MAP.get(source_label, "text")
+
+    # Якщо file picker активний і файли обрано — використовуємо їх шляхи
+    if source_type in _FILE_PICKER_SOURCES and uploaded_files:
+        paths = []
+        for f in uploaded_files:
+            # gr.File повертає str (шлях) або NamedString-подібний об'єкт
+            path = f if isinstance(f, str) else getattr(f, "name", str(f))
+            if path:
+                paths.append(path)
+        if paths:
+            return ",".join(paths)
+
+    # Fallback: textbox (ручний ввід шляхів або тексту)
+    return raw_input
 
 
 def generate_content(
@@ -105,6 +171,7 @@ def generate_content(
     site_label: str,
     source_label: str,
     raw_input: str,
+    uploaded_files: list | None,
 ):
     """Streaming-генератор для кнопки 'Генерувати'.
 
@@ -125,11 +192,21 @@ def generate_content(
         )
         return
 
-    if not raw_input.strip() and SOURCE_MAP.get(source_label) != "text":
-        pass  # Порожній raw_input для text — pipeline сам поверне помилку
-
     site = SITE_LABELS[site_label]
     source_type = SOURCE_MAP[source_label]
+    final_input = _resolve_raw_input(source_label, raw_input, uploaded_files)
+
+    if not final_input.strip() and source_type != "text":
+        yield (
+            "❌ Оберіть файли або вставте шлях / текст.",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(visible=False),
+            {},
+        )
+        return
 
     # ── Черга для streaming-логу ──────────────────────────────────────────────
     log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
@@ -140,7 +217,7 @@ def generate_content(
             product_name=product_name.strip(),
             site=site,
             source_type=source_type,
-            raw_input=raw_input.strip(),
+            raw_input=final_input.strip(),
             log_callback=lambda msg: log_q.put(("log", msg)),
         )
         pipeline_result.update(data)
@@ -264,6 +341,22 @@ def build_ui() -> gr.Blocks:
                     label="Джерело даних",
                 )
 
+                # ── File picker (прихований за замовчуванням) ─────────────────
+                file_picker = gr.File(
+                    label="📄 Оберіть файл(и)",
+                    file_count="multiple",
+                    file_types=[".pdf", ".md", ".markdown"],
+                    visible=False,
+                    interactive=True,
+                )
+
+                or_divider = gr.Markdown(
+                    "_— або —_",
+                    visible=False,
+                    elem_classes=["or-divider"],
+                )
+
+                # ── Textbox (основний ввід) ───────────────────────────────────
                 raw_input = gr.Textbox(
                     label="Вхідні дані",
                     placeholder=INPUT_PLACEHOLDERS[SOURCE_CHOICES[0]],
@@ -330,18 +423,27 @@ def build_ui() -> gr.Blocks:
                     )
 
         # ── Events ────────────────────────────────────────────────────────────
+
+        # Перемикання джерела → показати/сховати file picker
         source_radio.change(
             fn=on_source_change,
             inputs=[source_radio],
-            outputs=[raw_input],
+            outputs=[raw_input, file_picker, or_divider],
         )
 
+        # Генерація: передаємо і textbox, і file picker
         generate_btn.click(
             fn=generate_content,
-            inputs=[product_input, site_dropdown, source_radio, raw_input],
+            inputs=[
+                product_input,
+                site_dropdown,
+                source_radio,
+                raw_input,
+                file_picker,
+            ],
             outputs=[
                 log_output,
-                lang_dropdown,   # gr.update(choices=..., value=...) — один виклик
+                lang_dropdown,
                 preview_html,
                 download_file,
                 results_col,

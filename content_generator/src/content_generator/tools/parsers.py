@@ -1,8 +1,11 @@
 """
-Parsers for Content Extraction Pipeline v2.3
+Parsers for Content Extraction Pipeline v2.4
 
 Каскадний парсинг: Requests + BS4 → Selenium.
 Кожен метод зберігає зображення та відео як текстові маркери для LLM.
+
+Ключові зміни v2.4:
+- Multi-Markdown: extract_text_from_mds() — batch кількох MD файлів (дзеркалює extract_text_from_pdfs)
 
 Ключові зміни v2.3:
 - Markdown ingestion: extract_text_from_md() — single file з front matter extraction
@@ -235,6 +238,7 @@ def extract_text_from_pdfs(pdf_paths: list) -> str:
 # =====================================================================
 # Контракт дзеркалює PDF/URL парсери:
 # - extract_text_from_md()     → один файл
+# - extract_text_from_mds()    → batch кількох окремих файлів (через кому)
 # - extract_text_from_md_dir() → рекурсивний batch з маркерами джерел
 #
 # Markdown — вже структурований текст, каскад методів не потрібен.
@@ -495,6 +499,34 @@ def extract_text_from_md_dir(
 
     result = "\n".join(combined_parts)
     print(f"\n📊 Підсумок: оброблено {len(filtered_files)} MD, загалом {len(result)} символів.")
+    return result
+
+
+def extract_text_from_mds(md_paths: list) -> str:
+    """
+    Витягнення тексту з КІЛЬКОХ окремих Markdown файлів.
+    Дзеркалює патерн extract_text_from_pdfs(): список входів → per-file обробка → конкатенація.
+    """
+    if not md_paths:
+        return "[ПОМИЛКА] Список Markdown файлів порожній."
+
+    combined_parts = []
+
+    for md_path in md_paths:
+        md_path = md_path.strip()
+        if not md_path:
+            continue
+
+        print(f"\n⏳ Обробка MD: {md_path}")
+        page_text = extract_text_from_md(md_path)
+        filename = os.path.basename(md_path)
+        combined_parts.append(f"\n--- Джерело: {filename} ---\n{page_text}")
+
+    if not combined_parts:
+        return "[ПОМИЛКА] Жоден Markdown файл не дав результату."
+
+    result = "\n".join(combined_parts)
+    print(f"\n📊 Підсумок: оброблено {len(md_paths)} MD, загалом {len(result)} символів.")
     return result
 
 

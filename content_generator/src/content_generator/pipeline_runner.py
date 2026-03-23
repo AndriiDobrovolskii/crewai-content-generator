@@ -131,8 +131,10 @@ def run_pipeline_headless(
 
     from content_generator.tools.parsers import (
         extract_text_from_md,
+        extract_text_from_mds,
         extract_text_from_md_dir,
         extract_text_from_pdf,
+        extract_text_from_pdfs,
         extract_text_from_urls,
     )
     from content_generator.crew import (
@@ -166,13 +168,23 @@ def run_pipeline_headless(
             _log(f"✅ Отримано {len(raw_text):,} символів\n")
 
         elif source_type == "pdf":
-            _log(f"📄 Читаємо PDF: {raw_input}\n")
-            raw_text = extract_text_from_pdf(raw_input)
+            pdf_paths = [p.strip() for p in raw_input.split(",") if p.strip()]
+            if len(pdf_paths) == 1:
+                _log(f"📄 Читаємо PDF: {pdf_paths[0]}\n")
+                raw_text = extract_text_from_pdf(pdf_paths[0])
+            else:
+                _log(f"📄 Читаємо {len(pdf_paths)} PDF файлів...\n")
+                raw_text = extract_text_from_pdfs(pdf_paths)
             _log(f"✅ Отримано {len(raw_text):,} символів\n")
 
         elif source_type == "markdown":
-            _log(f"📑 Читаємо Markdown: {raw_input}\n")
-            raw_text = extract_text_from_md(raw_input)
+            md_paths = [p.strip() for p in raw_input.split(",") if p.strip()]
+            if len(md_paths) == 1:
+                _log(f"📑 Читаємо Markdown: {md_paths[0]}\n")
+                raw_text = extract_text_from_md(md_paths[0])
+            else:
+                _log(f"📑 Читаємо {len(md_paths)} Markdown файлів...\n")
+                raw_text = extract_text_from_mds(md_paths)
             _log(f"✅ Отримано {len(raw_text):,} символів\n")
 
         elif source_type == "markdown_dir":
@@ -186,6 +198,12 @@ def run_pipeline_headless(
 
         if not raw_text.strip():
             result["error"] = "Порожній текст після обробки джерела даних. Перевірте вхідні дані."
+            return result
+
+        # Guard: якщо парсер повернув помилку замість контенту — зупинити pipeline
+        # до виклику CrewAI, щоб не витрачати API-токени на порожній прохід.
+        if raw_text.lstrip().startswith("[ПОМИЛКА]"):
+            result["error"] = raw_text.strip()
             return result
 
         # ── Створення директорії виводу ──────────────────────────────────

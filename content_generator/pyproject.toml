@@ -12,6 +12,11 @@ dependencies = [
     "pypdf2>=3.0.1",
     "selenium>=4.41.0",
     "webdriver-manager>=4.0.2",
+    "python-dotenv>=1.0.1",
+    "PyYAML>=6.0.1",
+    "requests>=2.32.3",
+    "reflex>=0.7.1",
+    "google-generativeai>=0.8.4",
 ]
 
 [project.scripts]
