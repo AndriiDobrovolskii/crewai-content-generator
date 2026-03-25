@@ -5,6 +5,12 @@
     python src/content_generator/gui.py
 
 Потребує: gradio>=4.0  (uv add gradio)
+
+Зміни v2:
+- Native File Explorer: tkinter.filedialog для PDF та Markdown
+- Кнопка "📂 Відкрити File Explorer" відкриває нативний діалог Windows
+- Multi-file: можна обрати кілька файлів за раз (Ctrl+Click / Shift+Click)
+- Обрані шляхи автоматично вставляються в textbox через кому
 """
 
 import os
@@ -24,7 +30,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from content_generator.crew import SITES_CONFIG
-from content_generator.pipeline_runner import run_pipeline_headless, run_discovery_headless
+from content_generator.pipeline_runner import run_pipeline_headless
 
 
 # ── Константи UI ──────────────────────────────────────────────────────────────
@@ -42,22 +48,28 @@ SITE_CHOICES: list[str] = list(SITE_LABELS.keys())
 SOURCE_MAP: dict[str, str] = {
     "📝 Вставити текст": "text",
     "🌐 URL-адреси (через кому)": "urls",
-    "📄 PDF файл (шлях до файлу)": "pdf",
-    "📑 Markdown файл (шлях)": "markdown",
-    "📁 Директорія Markdown (шлях)": "markdown_dir",
-    "🔍 Auto-search (повний авто)": "auto_search",
-    "🔎 Auto-search (знайти URL)": "auto_search_review",
+    "📄 PDF файл(и)": "pdf",
+    "📑 Markdown файл(и)": "markdown",
+    "📁 Директорія Markdown": "markdown_dir",
 }
 SOURCE_CHOICES: list[str] = list(SOURCE_MAP.keys())
+
+# Джерела, для яких показуємо кнопку Browse
+_BROWSE_FILE_SOURCES = {"pdf", "markdown"}
+_BROWSE_DIR_SOURCES = {"markdown_dir"}
 
 INPUT_PLACEHOLDERS: dict[str, str] = {
     "📝 Вставити текст": "Вставте сирий текст про продукт (технічні характеристики, опис, FAQ)...",
     "🌐 URL-адреси (через кому)": "https://example.com/product, https://store.com/item",
-    "📄 PDF файл (шлях до файлу)": r"C:\Documents\product_datasheet.pdf",
-    "📑 Markdown файл (шлях)": r"C:\docs\product.md",
-    "📁 Директорія Markdown (шлях)": r"C:\docs\product_folder",
-    "🔍 Auto-search (повний авто)": "Поле не потрібне — агент шукатиме автоматично",
-    "🔎 Auto-search (знайти URL)": "Натисніть '🔎 Шукати URL' — знайдені URL з'являться тут",
+    "📄 PDF файл(и)": r"Шлях(и) до PDF: C:\docs\spec.pdf, C:\docs\manual.pdf",
+    "📑 Markdown файл(и)": r"Шлях(и) до MD: C:\docs\spec.md, C:\docs\manual.md",
+    "📁 Директорія Markdown": r"C:\docs\product_folder",
+}
+
+# tkinter file dialog фільтри
+_FILE_DIALOG_FILTERS: dict[str, list[tuple[str, str]]] = {
+    "pdf": [("PDF файли", "*.pdf"), ("Усі файли", "*.*")],
+    "markdown": [("Markdown файли", "*.md;*.markdown"), ("Усі файли", "*.*")],
 }
 
 CSS = """
@@ -71,8 +83,8 @@ CSS = """
 /* Кнопка генерації */
 .generate-btn { min-height: 54px !important; font-size: 1.05rem !important; font-weight: 700 !important; }
 
-/* Кнопка пошуку URL */
-.discover-btn { min-height: 42px !important; font-weight: 600 !important; }
+/* Кнопка browse */
+.browse-btn { min-height: 40px !important; }
 
 /* Лог агентів */
 .log-area textarea {
@@ -100,91 +112,88 @@ CSS = """
 """
 
 
+# ── Native File Explorer (tkinter) ───────────────────────────────────────────
+
+def _open_file_dialog(source_label: str) -> str:
+    """Відкриває нативний Windows File Explorer для вибору файлів або директорії.
+
+    Працює через tkinter.filedialog — відкриває СПРАВЖНІЙ діалог ОС,
+    не веб-компонент Gradio.
+    """
+    source_type = SOURCE_MAP.get(source_label, "text")
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        return "[ПОМИЛКА] tkinter не встановлено. Вставте шляхи вручну."
+
+    # Створюємо тимчасове вікно tk (обов'язково, навіть для діалогу)
+    root = tk.Tk()
+    root.withdraw()                      # Ховаємо головне вікно
+    root.attributes('-topmost', True)    # Діалог поверх усіх вікон
+    root.update()                        # Примусовий рендер (Windows fix)
+
+    result = ""
+
+    try:
+        if source_type in _BROWSE_FILE_SOURCES:
+            # Multi-file діалог
+            filetypes = _FILE_DIALOG_FILTERS.get(source_type, [("Усі файли", "*.*")])
+            files = filedialog.askopenfilenames(
+                title="Оберіть файл(и) для екстракції даних",
+                filetypes=filetypes,
+            )
+            if files:
+                result = ",".join(files)
+
+        elif source_type in _BROWSE_DIR_SOURCES:
+            # Вибір директорії
+            directory = filedialog.askdirectory(
+                title="Оберіть директорію з Markdown файлами",
+            )
+            if directory:
+                result = directory
+
+    finally:
+        root.destroy()
+
+    return result
+
+
 # ── Обробники подій ───────────────────────────────────────────────────────────
 
-def on_source_change(source_label: str) -> tuple:
-    """Оновлює placeholder, видимість кнопки пошуку та інтерактивність поля."""
+def on_source_change(source_label: str):
+    """Перемикає видимість кнопки Browse та placeholder залежно від джерела."""
     source_type = SOURCE_MAP.get(source_label, "text")
-    placeholder = INPUT_PLACEHOLDERS.get(source_label, "")
-    # Кнопка "Шукати URL" видима тільки для review-режиму
-    show_discover = source_type == "auto_search_review"
-    # Поле вводу неінтерактивне для повного авто (raw_input не потрібен)
-    interactive = source_type != "auto_search"
-    return (
-        gr.update(placeholder=placeholder, interactive=interactive),
-        gr.update(visible=show_discover),
+    show_browse = source_type in _BROWSE_FILE_SOURCES or source_type in _BROWSE_DIR_SOURCES
+
+    textbox_update = gr.update(
+        placeholder=INPUT_PLACEHOLDERS.get(source_label, ""),
+        lines=3 if show_browse else 10,
     )
 
+    browse_update = gr.update(visible=show_browse)
 
-def discover_urls(
-    product_name: str,
-    site_label: str,
-):
-    """Streaming-генератор для кнопки '🔎 Шукати URL'.
+    return textbox_update, browse_update
 
-    Запускає тільки URL Discovery агента (Phase 0).
-    Знайдені URL вставляються у поле вводу, джерело перемикається на URL-адреси.
 
-    Yields:
-        (log_text, raw_input_value, source_radio_value)
+def on_browse_click(source_label: str, current_input: str) -> str:
+    """Обробник кнопки Browse — відкриває нативний File Explorer.
+
+    Якщо в textbox вже є шляхи — нові додаються через кому (append).
     """
-    if not product_name.strip():
-        yield (
-            "❌ Вкажіть назву продукту перед пошуком.",
-            gr.update(),
-            gr.update(),
-        )
-        return
+    new_paths = _open_file_dialog(source_label)
 
-    site = SITE_LABELS[site_label]
-    log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
-    discovery_result: dict = {}
+    if not new_paths:
+        # Користувач закрив діалог без вибору — залишаємо поточне значення
+        return current_input
 
-    def _run() -> None:
-        data = run_discovery_headless(
-            product_name=product_name.strip(),
-            site=site,
-            log_callback=lambda msg: log_q.put(("log", msg)),
-        )
-        discovery_result.update(data)
-        log_q.put(("done", None))
+    if current_input.strip():
+        # Append до існуючих шляхів
+        return f"{current_input.strip()},{new_paths}"
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-
-    log_text = ""
-    while True:
-        kind, payload = log_q.get()
-        if kind == "log":
-            log_text += payload
-            yield (log_text, gr.update(), gr.update())
-        elif kind == "done":
-            break
-
-    if discovery_result.get("error"):
-        log_text += f"\n❌ Помилка discovery: {discovery_result['error']}\n"
-        yield (log_text, gr.update(), gr.update())
-        return
-
-    urls = discovery_result.get("urls", [])
-    if not urls:
-        log_text += "\n⚠️ URL не знайдено. Спробуйте ввести вручну.\n"
-        yield (log_text, gr.update(), gr.update())
-        return
-
-    urls_text = ", ".join(urls)
-    log_text += (
-        f"\n✅ Знайдено {len(urls)} URL → вставлено у поле вводу.\n"
-        "📋 Перевірте/відредагуйте URL і натисніть '🚀 Генерувати контент'.\n"
-    )
-
-    # Перемикаємо джерело на URL-адреси та вставляємо знайдені URL
-    url_source_label = [k for k, v in SOURCE_MAP.items() if v == "urls"][0]
-    yield (
-        log_text,
-        gr.update(value=urls_text, interactive=True),  # raw_input з URL
-        gr.update(value=url_source_label),              # source_radio → URL mode
-    )
+    return new_paths
 
 
 def generate_content(
@@ -213,27 +222,19 @@ def generate_content(
         return
 
     if not raw_input.strip() and SOURCE_MAP.get(source_label) != "text":
-        pass  # Порожній raw_input для text — pipeline сам поверне помилку
+        yield (
+            "❌ Оберіть файли через File Explorer або вставте шлях(и) / текст.",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(visible=False),
+            {},
+        )
+        return
 
     site = SITE_LABELS[site_label]
     source_type = SOURCE_MAP[source_label]
-
-    # ── Guard: auto_search_review без пошуку → підказка ──────────────────
-    if source_type == "auto_search_review":
-        if not raw_input.strip():
-            yield (
-                "⚠️ Спочатку натисніть '🔎 Шукати URL' для пошуку.\n"
-                "Або оберіть інший тип джерела.",
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(visible=False),
-                {},
-            )
-            return
-        # Якщо raw_input вже є (оператор вручну вставив URL після discover) — трактуємо як urls
-        source_type = "urls"
 
     # ── Черга для streaming-логу ──────────────────────────────────────────────
     log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
@@ -368,6 +369,15 @@ def build_ui() -> gr.Blocks:
                     label="Джерело даних",
                 )
 
+                # ── Кнопка Browse (прихована за замовчуванням) ─────────────────
+                browse_btn = gr.Button(
+                    "📂  Відкрити File Explorer",
+                    variant="secondary",
+                    visible=False,
+                    elem_classes=["browse-btn"],
+                )
+
+                # ── Textbox (основний ввід) ───────────────────────────────────
                 raw_input = gr.Textbox(
                     label="Вхідні дані",
                     placeholder=INPUT_PLACEHOLDERS[SOURCE_CHOICES[0]],
@@ -381,10 +391,10 @@ def build_ui() -> gr.Blocks:
                     elem_classes=["generate-btn"],
                 )
 
-                discover_btn = gr.Button(
-                    "🔎  Шукати URL",
-                    variant="secondary",
-                    visible=False,  # Видимий тільки для "auto_search_review"
+                gr.Markdown(
+                    "_Auto-search (URL Discovery) недоступний у GUI — "
+                    "використовуйте URL або текст._",
+                    visible=True,
                 )
 
             # ══════════════════════════════════════════════════════════════════
@@ -434,18 +444,22 @@ def build_ui() -> gr.Blocks:
                     )
 
         # ── Events ────────────────────────────────────────────────────────────
+
+        # Перемикання джерела → показати/сховати кнопку Browse
         source_radio.change(
             fn=on_source_change,
             inputs=[source_radio],
-            outputs=[raw_input, discover_btn],
+            outputs=[raw_input, browse_btn],
         )
 
-        discover_btn.click(
-            fn=discover_urls,
-            inputs=[product_input, site_dropdown],
-            outputs=[log_output, raw_input, source_radio],
+        # Кнопка Browse → відкриває нативний File Explorer → шляхи в textbox
+        browse_btn.click(
+            fn=on_browse_click,
+            inputs=[source_radio, raw_input],
+            outputs=[raw_input],
         )
 
+        # Генерація
         generate_btn.click(
             fn=generate_content,
             inputs=[product_input, site_dropdown, source_radio, raw_input],
