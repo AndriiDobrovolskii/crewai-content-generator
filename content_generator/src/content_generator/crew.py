@@ -34,7 +34,7 @@ with open(tasks_config_path, 'r', encoding='utf-8') as f:
 # - gpt-4o: копірайтинг, SEO, HTML, локалізація (висока точність)
 
 researcher_llm = LLM(model=os.getenv("RESEARCHER_MODEL", "gpt-4o-mini"))
-analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gpt-4o"))
+analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gemini/gemini-1.5-pro"))
 writer_llm = LLM(model=os.getenv("WRITER_MODEL", "gpt-4o"))
 frontend_llm = LLM(model=os.getenv("FRONTEND_MODEL", "gpt-4o"))
 localizer_llm = LLM(model=os.getenv("LOCALIZER_MODEL", "gpt-4o"))
@@ -408,6 +408,35 @@ class ECommerceContentCrew:
         self._tasks['content_extraction'] = task
         return task
 
+    # --- GUI-SAFE AUTO-SEARCH (без human_input) ---
+
+    def url_discovery_task_headless(self, product_name: str) -> Task:
+        """URL discovery без human_input — для GUI auto-search."""
+        task = Task(
+            config=tasks_config['url_discovery_task'],
+            agent=self._web_researcher,
+            human_input=False  # ← GUI-safe: без блокуючого input()
+        )
+        self._tasks['url_discovery'] = task
+        return task
+
+    def create_discovery_crew(self, product_name: str, task_callback=None) -> Crew:
+        """Мінімальний Crew тільки для URL discovery (Phase 0).
+
+        Повертає Crew з одним агентом і одною задачею.
+        Використовується GUI для пошуку URL перед основним pipeline.
+        """
+        task = self.url_discovery_task_headless(product_name)
+        return Crew(
+            agents=[self._web_researcher],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,   # Не потрібна пам'ять для одноразового пошуку
+            cache=True,
+            verbose=True,
+            task_callback=task_callback
+        )
+
     def tech_specs_extraction_task(self, product_name: str) -> Task:
         config = tasks_config['tech_specs_extraction_task'].copy()
         config['description'] = config['description'] + "\n\n{language_instruction}"
@@ -508,7 +537,7 @@ class ECommerceContentCrew:
             memory=True,
             cache=True,
             verbose=True,
-            task_callback=task_callback,
+            task_callback=task_callback
         )
 
 
@@ -567,7 +596,7 @@ class LocalizationCrew:
             memory=True,
             cache=True,
             verbose=True,
-            task_callback=task_callback,
+            task_callback=task_callback
         )
 
     def get_inputs(self, product_name: str, site_name: str,

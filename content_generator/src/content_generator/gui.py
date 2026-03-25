@@ -5,11 +5,6 @@
     python src/content_generator/gui.py
 
 Потребує: gradio>=4.0  (uv add gradio)
-
-Зміни v2:
-- File Explorer: gr.File для PDF та Markdown (вибір файлів через діалог ОС)
-- Автоматичне перемикання між текстовим вводом і файловим вибором
-- Multi-file підтримка: кілька PDF або MD файлів за раз
 """
 
 import os
@@ -29,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from content_generator.crew import SITES_CONFIG
-from content_generator.pipeline_runner import run_pipeline_headless
+from content_generator.pipeline_runner import run_pipeline_headless, run_discovery_headless
 
 
 # ── Константи UI ──────────────────────────────────────────────────────────────
@@ -47,31 +42,22 @@ SITE_CHOICES: list[str] = list(SITE_LABELS.keys())
 SOURCE_MAP: dict[str, str] = {
     "📝 Вставити текст": "text",
     "🌐 URL-адреси (через кому)": "urls",
-    "📄 PDF файл(и)": "pdf",
-    "📑 Markdown файл(и)": "markdown",
+    "📄 PDF файл (шлях до файлу)": "pdf",
+    "📑 Markdown файл (шлях)": "markdown",
     "📁 Директорія Markdown (шлях)": "markdown_dir",
+    "🔍 Auto-search (повний авто)": "auto_search",
+    "🔎 Auto-search (знайти URL)": "auto_search_review",
 }
 SOURCE_CHOICES: list[str] = list(SOURCE_MAP.keys())
-
-# Джерела, для яких показуємо file picker замість textbox
-_FILE_PICKER_SOURCES = {"pdf", "markdown"}
 
 INPUT_PLACEHOLDERS: dict[str, str] = {
     "📝 Вставити текст": "Вставте сирий текст про продукт (технічні характеристики, опис, FAQ)...",
     "🌐 URL-адреси (через кому)": "https://example.com/product, https://store.com/item",
-    "📄 PDF файл(и)": r"Або вставте шлях(и) через кому: C:\docs\file1.pdf, C:\docs\file2.pdf",
-    "📑 Markdown файл(и)": r"Або вставте шлях(и) через кому: C:\docs\spec.md, C:\docs\manual.md",
+    "📄 PDF файл (шлях до файлу)": r"C:\Documents\product_datasheet.pdf",
+    "📑 Markdown файл (шлях)": r"C:\docs\product.md",
     "📁 Директорія Markdown (шлях)": r"C:\docs\product_folder",
-}
-
-FILE_PICKER_LABELS: dict[str, str] = {
-    "pdf": "📄 Оберіть PDF файл(и)",
-    "markdown": "📑 Оберіть Markdown файл(и)",
-}
-
-FILE_PICKER_TYPES: dict[str, list[str]] = {
-    "pdf": [".pdf"],
-    "markdown": [".md", ".markdown"],
+    "🔍 Auto-search (повний авто)": "Поле не потрібне — агент шукатиме автоматично",
+    "🔎 Auto-search (знайти URL)": "Натисніть '🔎 Шукати URL' — знайдені URL з'являться тут",
 }
 
 CSS = """
@@ -84,6 +70,9 @@ CSS = """
 
 /* Кнопка генерації */
 .generate-btn { min-height: 54px !important; font-size: 1.05rem !important; font-weight: 700 !important; }
+
+/* Кнопка пошуку URL */
+.discover-btn { min-height: 42px !important; font-weight: 600 !important; }
 
 /* Лог агентів */
 .log-area textarea {
@@ -108,62 +97,94 @@ CSS = """
 /* Статус-бейдж */
 .status-ready { color: #16a34a; font-weight: 600; }
 .status-working { color: #d97706; font-weight: 600; }
-
-/* Роздільник OR */
-.or-divider { text-align: center; color: #9ca3af; font-size: 0.82rem; margin: 0.3rem 0; }
 """
 
 
 # ── Обробники подій ───────────────────────────────────────────────────────────
 
-def on_source_change(source_label: str):
-    """Перемикає видимість: textbox ↔ file picker залежно від джерела."""
+def on_source_change(source_label: str) -> tuple:
+    """Оновлює placeholder, видимість кнопки пошуку та інтерактивність поля."""
     source_type = SOURCE_MAP.get(source_label, "text")
-    use_picker = source_type in _FILE_PICKER_SOURCES
-
-    # Textbox: завжди видимий, але менший коли є picker
-    textbox_update = gr.update(
-        placeholder=INPUT_PLACEHOLDERS.get(source_label, ""),
-        visible=True,
-        lines=2 if use_picker else 10,
-        label="Або вставте шлях(и) вручну" if use_picker else "Вхідні дані",
+    placeholder = INPUT_PLACEHOLDERS.get(source_label, "")
+    # Кнопка "Шукати URL" видима тільки для review-режиму
+    show_discover = source_type == "auto_search_review"
+    # Поле вводу неінтерактивне для повного авто (raw_input не потрібен)
+    interactive = source_type != "auto_search"
+    return (
+        gr.update(placeholder=placeholder, interactive=interactive),
+        gr.update(visible=show_discover),
     )
 
-    # File picker: видимий тільки для pdf / markdown
-    picker_update = gr.update(
-        visible=use_picker,
-        label=FILE_PICKER_LABELS.get(source_type, "Оберіть файли"),
-        file_types=FILE_PICKER_TYPES.get(source_type, None),
-        value=None,
+
+def discover_urls(
+    product_name: str,
+    site_label: str,
+):
+    """Streaming-генератор для кнопки '🔎 Шукати URL'.
+
+    Запускає тільки URL Discovery агента (Phase 0).
+    Знайдені URL вставляються у поле вводу, джерело перемикається на URL-адреси.
+
+    Yields:
+        (log_text, raw_input_value, source_radio_value)
+    """
+    if not product_name.strip():
+        yield (
+            "❌ Вкажіть назву продукту перед пошуком.",
+            gr.update(),
+            gr.update(),
+        )
+        return
+
+    site = SITE_LABELS[site_label]
+    log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    discovery_result: dict = {}
+
+    def _run() -> None:
+        data = run_discovery_headless(
+            product_name=product_name.strip(),
+            site=site,
+            log_callback=lambda msg: log_q.put(("log", msg)),
+        )
+        discovery_result.update(data)
+        log_q.put(("done", None))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    log_text = ""
+    while True:
+        kind, payload = log_q.get()
+        if kind == "log":
+            log_text += payload
+            yield (log_text, gr.update(), gr.update())
+        elif kind == "done":
+            break
+
+    if discovery_result.get("error"):
+        log_text += f"\n❌ Помилка discovery: {discovery_result['error']}\n"
+        yield (log_text, gr.update(), gr.update())
+        return
+
+    urls = discovery_result.get("urls", [])
+    if not urls:
+        log_text += "\n⚠️ URL не знайдено. Спробуйте ввести вручну.\n"
+        yield (log_text, gr.update(), gr.update())
+        return
+
+    urls_text = ", ".join(urls)
+    log_text += (
+        f"\n✅ Знайдено {len(urls)} URL → вставлено у поле вводу.\n"
+        "📋 Перевірте/відредагуйте URL і натисніть '🚀 Генерувати контент'.\n"
     )
 
-    # OR-розділювач між picker і textbox
-    or_update = gr.update(visible=use_picker)
-
-    return textbox_update, picker_update, or_update
-
-
-def _resolve_raw_input(
-    source_label: str,
-    raw_input: str,
-    uploaded_files: list | None,
-) -> str:
-    """Формує фінальний raw_input: пріоритет — file picker, fallback — textbox."""
-    source_type = SOURCE_MAP.get(source_label, "text")
-
-    # Якщо file picker активний і файли обрано — використовуємо їх шляхи
-    if source_type in _FILE_PICKER_SOURCES and uploaded_files:
-        paths = []
-        for f in uploaded_files:
-            # gr.File повертає str (шлях) або NamedString-подібний об'єкт
-            path = f if isinstance(f, str) else getattr(f, "name", str(f))
-            if path:
-                paths.append(path)
-        if paths:
-            return ",".join(paths)
-
-    # Fallback: textbox (ручний ввід шляхів або тексту)
-    return raw_input
+    # Перемикаємо джерело на URL-адреси та вставляємо знайдені URL
+    url_source_label = [k for k, v in SOURCE_MAP.items() if v == "urls"][0]
+    yield (
+        log_text,
+        gr.update(value=urls_text, interactive=True),  # raw_input з URL
+        gr.update(value=url_source_label),              # source_radio → URL mode
+    )
 
 
 def generate_content(
@@ -171,7 +192,6 @@ def generate_content(
     site_label: str,
     source_label: str,
     raw_input: str,
-    uploaded_files: list | None,
 ):
     """Streaming-генератор для кнопки 'Генерувати'.
 
@@ -192,21 +212,28 @@ def generate_content(
         )
         return
 
+    if not raw_input.strip() and SOURCE_MAP.get(source_label) != "text":
+        pass  # Порожній raw_input для text — pipeline сам поверне помилку
+
     site = SITE_LABELS[site_label]
     source_type = SOURCE_MAP[source_label]
-    final_input = _resolve_raw_input(source_label, raw_input, uploaded_files)
 
-    if not final_input.strip() and source_type != "text":
-        yield (
-            "❌ Оберіть файли або вставте шлях / текст.",
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(visible=False),
-            {},
-        )
-        return
+    # ── Guard: auto_search_review без пошуку → підказка ──────────────────
+    if source_type == "auto_search_review":
+        if not raw_input.strip():
+            yield (
+                "⚠️ Спочатку натисніть '🔎 Шукати URL' для пошуку.\n"
+                "Або оберіть інший тип джерела.",
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(visible=False),
+                {},
+            )
+            return
+        # Якщо raw_input вже є (оператор вручну вставив URL після discover) — трактуємо як urls
+        source_type = "urls"
 
     # ── Черга для streaming-логу ──────────────────────────────────────────────
     log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
@@ -217,7 +244,7 @@ def generate_content(
             product_name=product_name.strip(),
             site=site,
             source_type=source_type,
-            raw_input=final_input.strip(),
+            raw_input=raw_input.strip(),
             log_callback=lambda msg: log_q.put(("log", msg)),
         )
         pipeline_result.update(data)
@@ -341,22 +368,6 @@ def build_ui() -> gr.Blocks:
                     label="Джерело даних",
                 )
 
-                # ── File picker (прихований за замовчуванням) ─────────────────
-                file_picker = gr.File(
-                    label="📄 Оберіть файл(и)",
-                    file_count="multiple",
-                    file_types=[".pdf", ".md", ".markdown"],
-                    visible=False,
-                    interactive=True,
-                )
-
-                or_divider = gr.Markdown(
-                    "_— або —_",
-                    visible=False,
-                    elem_classes=["or-divider"],
-                )
-
-                # ── Textbox (основний ввід) ───────────────────────────────────
                 raw_input = gr.Textbox(
                     label="Вхідні дані",
                     placeholder=INPUT_PLACEHOLDERS[SOURCE_CHOICES[0]],
@@ -370,10 +381,10 @@ def build_ui() -> gr.Blocks:
                     elem_classes=["generate-btn"],
                 )
 
-                gr.Markdown(
-                    "_Auto-search (URL Discovery) недоступний у GUI — "
-                    "використовуйте URL або текст._",
-                    visible=True,
+                discover_btn = gr.Button(
+                    "🔎  Шукати URL",
+                    variant="secondary",
+                    visible=False,  # Видимий тільки для "auto_search_review"
                 )
 
             # ══════════════════════════════════════════════════════════════════
@@ -423,24 +434,21 @@ def build_ui() -> gr.Blocks:
                     )
 
         # ── Events ────────────────────────────────────────────────────────────
-
-        # Перемикання джерела → показати/сховати file picker
         source_radio.change(
             fn=on_source_change,
             inputs=[source_radio],
-            outputs=[raw_input, file_picker, or_divider],
+            outputs=[raw_input, discover_btn],
         )
 
-        # Генерація: передаємо і textbox, і file picker
+        discover_btn.click(
+            fn=discover_urls,
+            inputs=[product_input, site_dropdown],
+            outputs=[log_output, raw_input, source_radio],
+        )
+
         generate_btn.click(
             fn=generate_content,
-            inputs=[
-                product_input,
-                site_dropdown,
-                source_radio,
-                raw_input,
-                file_picker,
-            ],
+            inputs=[product_input, site_dropdown, source_radio, raw_input],
             outputs=[
                 log_output,
                 lang_dropdown,

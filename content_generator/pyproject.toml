@@ -5,18 +5,19 @@ description = "content-generator using crewAI"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "beautifulsoup4>=4.13.5",
-    "crewai[google-genai,tools]==1.9.3",
+    "beautifulsoup4>=4.13.0",
+    "crewai[google-genai,tools]==1.9.3", # Залишив вашу фіксовану версію, бо crewAI чутливий до оновлень
+    "crewai-tools>=0.38.1",              # Додано з requirements
     "firecrawl-py>=4.18.0",
-    "gradio>=4.44.0",
+    "gradio>=5.0.0",                     # Оновлено до версії 5.x
     "pypdf2>=3.0.1",
-    "selenium>=4.41.0",
+    "selenium>=4.28.0",                  # Оновлено мінімальну версію
     "webdriver-manager>=4.0.2",
-    "python-dotenv>=1.0.1",
-    "PyYAML>=6.0.1",
-    "requests>=2.32.3",
-    "reflex>=0.7.1",
-    "google-generativeai>=0.8.4",
+    "python-dotenv>=1.1.0",              # Оновлено мінімальну версію
+    "PyYAML>=6.0.2",                     # Оновлено мінімальну версію
+    "requests>=2.32.0",
+    "google-generativeai>=0.8.0",
+    "pydantic>=2.11.0",                  # Додано з requirements
 ]
 
 [project.scripts]
