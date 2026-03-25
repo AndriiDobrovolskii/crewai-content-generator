@@ -2,6 +2,12 @@
 
 Вся логіка run_pipeline() з main.py, але без input() — параметри
 передаються аргументами, прогрес — через log_callback.
+
+Зміни v2:
+- Multi-PDF / Multi-Markdown: comma-separated шляхи
+- Early-exit guard: [ПОМИЛКА] зупиняє pipeline до CrewAI
+- run_discovery_headless(): Phase 0 — окремий URL discovery для GUI HITL
+- auto_search source_type: повний авто-пошук (discovery → scrape → pipeline)
 """
 
 import contextlib
@@ -18,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _INVALID_CHARS = r'[\\/:*?"<>|()]'
+_URL_PATTERN = re.compile(r'https?://[^\s,\)\"\'>]+')  # Витяг URL з виводу агента
 
 
 def _strip_ansi(text: str) -> str:
@@ -83,6 +90,105 @@ def _make_task_callback(log_cb: Callable[[str], None]) -> Callable:
     return cb
 
 
+# =====================================================================
+# 🔎 URL DISCOVERY (Phase 0)
+# =====================================================================
+
+def _parse_urls_from_output(raw_output: str) -> list[str]:
+    """Витягує унікальні URL з тексту агента, зберігаючи порядок."""
+    urls = _URL_PATTERN.findall(raw_output)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in urls:
+        url = url.rstrip(".,;:)>]")  # Прибираємо trailing пунктуацію
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def run_discovery_headless(
+    product_name: str,
+    site: str,
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Запускає ТІЛЬКИ URL discovery (Phase 0) і повертає знайдені URL.
+
+    Використовується GUI для Шляху Б (пошук URL → перевірка → генерація).
+
+    Returns:
+        {
+            "urls":       list[str],  # Знайдені URL
+            "raw_output": str,        # Повний вивід агента
+            "error":      str | None,
+        }
+    """
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    _src_dir = os.path.dirname(_current_dir)
+    if _src_dir not in sys.path:
+        sys.path.insert(0, _src_dir)
+
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    result: dict[str, Any] = {"urls": [], "raw_output": "", "error": None}
+
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
+    try:
+        from content_generator.crew import ECommerceContentCrew
+
+        task_cb = _make_task_callback(log_callback) if log_callback else None
+        stdout_ctx: Any = (
+            _ThreadLocalStdout(log_callback, threading.current_thread().ident)
+            if log_callback
+            else contextlib.nullcontext()
+        )
+
+        _log("🔎 Phase 0: URL Discovery...\n")
+        _log(f"   Продукт: {product_name}\n")
+        _log(f"   Магазин: {site}\n\n")
+
+        core_crew_module = ECommerceContentCrew()
+        discovery_crew = core_crew_module.create_discovery_crew(
+            product_name, task_callback=task_cb
+        )
+
+        discovery_inputs = {
+            "product_name": product_name,
+            "site_name": site,
+        }
+
+        with stdout_ctx:
+            crew_result = discovery_crew.kickoff(inputs=discovery_inputs)
+
+        raw_output = crew_result.raw
+        result["raw_output"] = raw_output
+
+        urls = _parse_urls_from_output(raw_output)
+        result["urls"] = urls
+
+        if urls:
+            _log(f"\n✅ Знайдено {len(urls)} URL:\n")
+            for i, u in enumerate(urls, 1):
+                _log(f"   {i}. {u}\n")
+        else:
+            _log("\n⚠️ Агент не знайшов жодного URL.\n")
+
+    except Exception as exc:
+        logger.exception("Discovery error")
+        result["error"] = str(exc)
+        _log(f"\n❌ ПОМИЛКА discovery: {exc}\n")
+
+    return result
+
+
+# =====================================================================
+# 🚀 ОСНОВНИЙ PIPELINE
+# =====================================================================
+
 def run_pipeline_headless(
     product_name: str,
     site: str,
@@ -96,7 +202,7 @@ def run_pipeline_headless(
     Args:
         product_name: Назва продукту.
         site:         Ключ з SITES_CONFIG.
-        source_type:  "text" | "urls" | "pdf" | "markdown" | "markdown_dir"
+        source_type:  "text" | "urls" | "pdf" | "markdown" | "markdown_dir" | "auto_search"
         raw_input:    Сирий текст, URL(и) через кому, або шлях до файлу/директорії.
         log_callback: Функція, яка отримує рядки прогресу в реальному часі.
         exclude_patterns: Тільки для "markdown_dir" — паттерни виключення.
@@ -191,6 +297,30 @@ def run_pipeline_headless(
             _log(f"📁 Сканую директорію Markdown: {raw_input}\n")
             raw_text = extract_text_from_md_dir(raw_input, exclude_patterns=exclude_patterns)
             _log(f"✅ Отримано {len(raw_text):,} символів\n")
+
+        elif source_type == "auto_search":
+            # ── Повний авто-пошук: discovery → scrape → pipeline ─────
+            _log("🔍 AUTO-SEARCH: запуск URL Discovery агента...\n")
+            discovery = run_discovery_headless(
+                product_name=product_name,
+                site=site,
+                log_callback=log_callback,
+            )
+            if discovery.get("error"):
+                result["error"] = f"Discovery failed: {discovery['error']}"
+                return result
+
+            found_urls = discovery.get("urls", [])
+            if not found_urls:
+                result["error"] = (
+                    "Auto-search не знайшов жодного URL. "
+                    "Спробуйте вказати URL вручну або вставити текст."
+                )
+                return result
+
+            _log(f"\n⏳ Витягуємо контент із {len(found_urls)} URL...\n")
+            raw_text = extract_text_from_urls(found_urls)
+            _log(f"✅ Отримано {len(raw_text):,} символів з auto-search\n")
 
         else:
             result["error"] = f"Невідомий тип джерела: '{source_type}'"

@@ -6,11 +6,11 @@
 
 Потребує: gradio>=4.0  (uv add gradio)
 
-Зміни v2:
+Зміни v3:
+- 7 джерел даних (text, urls, pdf, markdown, markdown_dir, auto_search, auto_search_review)
 - Native File Explorer: tkinter.filedialog для PDF та Markdown
-- Кнопка "📂 Відкрити File Explorer" відкриває нативний діалог Windows
-- Multi-file: можна обрати кілька файлів за раз (Ctrl+Click / Shift+Click)
-- Обрані шляхи автоматично вставляються в textbox через кому
+- HITL: "🔎 Шукати URL" → агент знаходить URL → вставляє в textbox →
+  оператор перевіряє/редагує → натискає "Генерувати"
 """
 
 import os
@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from content_generator.crew import SITES_CONFIG
-from content_generator.pipeline_runner import run_pipeline_headless
+from content_generator.pipeline_runner import run_pipeline_headless, run_discovery_headless
 
 
 # ── Константи UI ──────────────────────────────────────────────────────────────
@@ -50,20 +50,27 @@ SOURCE_MAP: dict[str, str] = {
     "🌐 URL-адреси (через кому)": "urls",
     "📄 PDF файл(и)": "pdf",
     "📑 Markdown файл(и)": "markdown",
-    "📁 Директорія Markdown": "markdown_dir",
+    "📁 Директорія Markdown (шлях)": "markdown_dir",
+    "🔍 Auto-search (повний авто)": "auto_search",
+    "🔎 Auto-search (знайти URL)": "auto_search_review",
 }
 SOURCE_CHOICES: list[str] = list(SOURCE_MAP.keys())
 
-# Джерела, для яких показуємо кнопку Browse
+# Джерела, для яких показуємо кнопку Browse (файли)
 _BROWSE_FILE_SOURCES = {"pdf", "markdown"}
+# Джерела, для яких показуємо кнопку Browse (директорія)
 _BROWSE_DIR_SOURCES = {"markdown_dir"}
+# Джерело, для якого показуємо кнопку "Шукати URL"
+_DISCOVER_SOURCES = {"auto_search_review"}
 
 INPUT_PLACEHOLDERS: dict[str, str] = {
     "📝 Вставити текст": "Вставте сирий текст про продукт (технічні характеристики, опис, FAQ)...",
     "🌐 URL-адреси (через кому)": "https://example.com/product, https://store.com/item",
     "📄 PDF файл(и)": r"Шлях(и) до PDF: C:\docs\spec.pdf, C:\docs\manual.pdf",
     "📑 Markdown файл(и)": r"Шлях(и) до MD: C:\docs\spec.md, C:\docs\manual.md",
-    "📁 Директорія Markdown": r"C:\docs\product_folder",
+    "📁 Директорія Markdown (шлях)": r"C:\docs\product_folder",
+    "🔍 Auto-search (повний авто)": "Поле не потрібне — агент шукатиме автоматично",
+    "🔎 Auto-search (знайти URL)": "Натисніть '🔎 Шукати URL' — знайдені URL з'являться тут для перевірки",
 }
 
 # tkinter file dialog фільтри
@@ -83,8 +90,9 @@ CSS = """
 /* Кнопка генерації */
 .generate-btn { min-height: 54px !important; font-size: 1.05rem !important; font-weight: 700 !important; }
 
-/* Кнопка browse */
+/* Кнопки browse / discover */
 .browse-btn { min-height: 40px !important; }
+.discover-btn { min-height: 42px !important; font-weight: 600 !important; }
 
 /* Лог агентів */
 .log-area textarea {
@@ -115,11 +123,7 @@ CSS = """
 # ── Native File Explorer (tkinter) ───────────────────────────────────────────
 
 def _open_file_dialog(source_label: str) -> str:
-    """Відкриває нативний Windows File Explorer для вибору файлів або директорії.
-
-    Працює через tkinter.filedialog — відкриває СПРАВЖНІЙ діалог ОС,
-    не веб-компонент Gradio.
-    """
+    """Відкриває нативний Windows File Explorer для вибору файлів або директорії."""
     source_type = SOURCE_MAP.get(source_label, "text")
 
     try:
@@ -128,17 +132,15 @@ def _open_file_dialog(source_label: str) -> str:
     except ImportError:
         return "[ПОМИЛКА] tkinter не встановлено. Вставте шляхи вручну."
 
-    # Створюємо тимчасове вікно tk (обов'язково, навіть для діалогу)
     root = tk.Tk()
-    root.withdraw()                      # Ховаємо головне вікно
-    root.attributes('-topmost', True)    # Діалог поверх усіх вікон
-    root.update()                        # Примусовий рендер (Windows fix)
+    root.withdraw()
+    root.attributes('-topmost', True)
+    root.update()
 
     result = ""
 
     try:
         if source_type in _BROWSE_FILE_SOURCES:
-            # Multi-file діалог
             filetypes = _FILE_DIALOG_FILTERS.get(source_type, [("Усі файли", "*.*")])
             files = filedialog.askopenfilenames(
                 title="Оберіть файл(и) для екстракції даних",
@@ -148,7 +150,6 @@ def _open_file_dialog(source_label: str) -> str:
                 result = ",".join(files)
 
         elif source_type in _BROWSE_DIR_SOURCES:
-            # Вибір директорії
             directory = filedialog.askdirectory(
                 title="Оберіть директорію з Markdown файлами",
             )
@@ -164,36 +165,105 @@ def _open_file_dialog(source_label: str) -> str:
 # ── Обробники подій ───────────────────────────────────────────────────────────
 
 def on_source_change(source_label: str):
-    """Перемикає видимість кнопки Browse та placeholder залежно від джерела."""
+    """Перемикає видимість кнопок та стан textbox залежно від джерела."""
     source_type = SOURCE_MAP.get(source_label, "text")
+
     show_browse = source_type in _BROWSE_FILE_SOURCES or source_type in _BROWSE_DIR_SOURCES
+    show_discover = source_type in _DISCOVER_SOURCES
+    interactive = source_type != "auto_search"
 
     textbox_update = gr.update(
         placeholder=INPUT_PLACEHOLDERS.get(source_label, ""),
-        lines=3 if show_browse else 10,
+        lines=3 if (show_browse or show_discover) else 10,
+        interactive=interactive,
     )
 
     browse_update = gr.update(visible=show_browse)
+    discover_update = gr.update(visible=show_discover)
 
-    return textbox_update, browse_update
+    return textbox_update, browse_update, discover_update
 
 
 def on_browse_click(source_label: str, current_input: str) -> str:
-    """Обробник кнопки Browse — відкриває нативний File Explorer.
-
-    Якщо в textbox вже є шляхи — нові додаються через кому (append).
-    """
+    """Кнопка Browse → нативний File Explorer → шляхи в textbox (append)."""
     new_paths = _open_file_dialog(source_label)
-
     if not new_paths:
-        # Користувач закрив діалог без вибору — залишаємо поточне значення
         return current_input
-
     if current_input.strip():
-        # Append до існуючих шляхів
         return f"{current_input.strip()},{new_paths}"
-
     return new_paths
+
+
+def discover_urls(product_name: str, site_label: str):
+    """Streaming: '🔎 Шукати URL' → URL Discovery агент → URL в textbox.
+
+    HITL flow:
+    1. Агент шукає URL → лог показує прогрес
+    2. Знайдені URL вставляються в textbox (editable)
+    3. Джерело перемикається на "🌐 URL-адреси"
+    4. Оператор перевіряє/редагує/додає URL
+    5. Натискає "Генерувати" — pipeline працює з відредагованими URL
+
+    Yields:
+        (log_text, raw_input_value, source_radio_value)
+    """
+    if not product_name.strip():
+        yield (
+            "❌ Вкажіть назву продукту перед пошуком.",
+            gr.update(),
+            gr.update(),
+        )
+        return
+
+    site = SITE_LABELS[site_label]
+    log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    discovery_result: dict = {}
+
+    def _run() -> None:
+        data = run_discovery_headless(
+            product_name=product_name.strip(),
+            site=site,
+            log_callback=lambda msg: log_q.put(("log", msg)),
+        )
+        discovery_result.update(data)
+        log_q.put(("done", None))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    log_text = ""
+    while True:
+        kind, payload = log_q.get()
+        if kind == "log":
+            log_text += payload
+            yield (log_text, gr.update(), gr.update())
+        elif kind == "done":
+            break
+
+    if discovery_result.get("error"):
+        log_text += f"\n❌ Помилка discovery: {discovery_result['error']}\n"
+        yield (log_text, gr.update(), gr.update())
+        return
+
+    urls = discovery_result.get("urls", [])
+    if not urls:
+        log_text += "\n⚠️ URL не знайдено. Спробуйте ввести вручну.\n"
+        yield (log_text, gr.update(), gr.update())
+        return
+
+    urls_text = ", ".join(urls)
+    log_text += (
+        f"\n✅ Знайдено {len(urls)} URL → вставлено у поле вводу.\n"
+        "📋 Перевірте/відредагуйте URL і натисніть '🚀 Генерувати контент'.\n"
+    )
+
+    # Перемикаємо джерело на URL-адреси та вставляємо знайдені URL
+    url_source_label = [k for k, v in SOURCE_MAP.items() if v == "urls"][0]
+    yield (
+        log_text,
+        gr.update(value=urls_text, interactive=True),
+        gr.update(value=url_source_label),
+    )
 
 
 def generate_content(
@@ -208,35 +278,25 @@ def generate_content(
         (log_text, lang_choices, selected_lang, preview_html,
          download_file, results_visible, files_state)
     """
-    # ── Валідація ─────────────────────────────────────────────────────────────
     if not product_name.strip():
         yield (
             "❌ Вкажіть назву продукту.",
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(visible=False),
-            {},
-        )
-        return
-
-    if not raw_input.strip() and SOURCE_MAP.get(source_label) != "text":
-        yield (
-            "❌ Оберіть файли через File Explorer або вставте шлях(и) / текст.",
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(visible=False),
-            {},
+            gr.update(), gr.update(), gr.update(), gr.update(),
+            gr.update(visible=False), {},
         )
         return
 
     site = SITE_LABELS[site_label]
     source_type = SOURCE_MAP[source_label]
 
-    # ── Черга для streaming-логу ──────────────────────────────────────────────
+    if not raw_input.strip() and source_type not in ("text", "auto_search"):
+        yield (
+            "❌ Оберіть файли або вставте дані.",
+            gr.update(), gr.update(), gr.update(), gr.update(),
+            gr.update(visible=False), {},
+        )
+        return
+
     log_q: queue.Queue[tuple[str, str | None]] = queue.Queue()
     pipeline_result: dict = {}
 
@@ -254,14 +314,13 @@ def generate_content(
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    # ── Streaming log до завершення ───────────────────────────────────────────
     log_text = ""
     _empty = (
-        gr.update(choices=[], value=None),   # lang_dropdown
-        gr.update(value=""),                 # preview_html
-        gr.update(value=None, visible=False),# download_file
-        gr.update(visible=False),            # results_col
-        {},                                  # files_state
+        gr.update(choices=[], value=None),
+        gr.update(value=""),
+        gr.update(value=None, visible=False),
+        gr.update(visible=False),
+        {},
     )
     while True:
         kind, payload = log_q.get()
@@ -271,7 +330,6 @@ def generate_content(
         elif kind == "done":
             break
 
-    # ── Результат ─────────────────────────────────────────────────────────────
     if pipeline_result.get("error"):
         log_text += f"\n\n❌ ПОМИЛКА: {pipeline_result['error']}\n"
         yield (log_text, *_empty)
@@ -295,14 +353,12 @@ def generate_content(
 
 
 def on_lang_select(lang: str, files: dict) -> str:
-    """Оновлює HTML-preview при виборі мови."""
     if not lang or not files:
         return ""
     return _wrap_preview(files.get(lang, ""))
 
 
 def _wrap_preview(html_fragment: str) -> str:
-    """Обгортає HTML-фрагмент у мінімальну сторінку для preview."""
     if not html_fragment:
         return ""
     return f"""
@@ -333,21 +389,19 @@ def build_ui() -> gr.Blocks:
 
     with gr.Blocks(title="GEO Content Generator") as demo:
 
-        # ── Заголовок ─────────────────────────────────────────────────────────
         gr.Markdown("# 🤖 GEO Content Generator", elem_classes=["main-header"])
         gr.Markdown(
             "CrewAI Multi-Agent Pipeline · E-Commerce Product Descriptions",
             elem_classes=["main-subtitle"],
         )
 
-        # ── Стан (зберігає dict файлів між подіями) ───────────────────────────
         files_state: gr.State = gr.State({})
 
         with gr.Row(equal_height=False):
 
-            # ══════════════════════════════════════════════════════════════════
-            # ЛІВА ПАНЕЛЬ — параметри
-            # ══════════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════
+            # ЛІВА ПАНЕЛЬ
+            # ══════════════════════════════════════════════════════════════
             with gr.Column(scale=1, min_width=340, elem_classes=["left-panel"]):
                 gr.Markdown("### ⚙️ Параметри генерації")
 
@@ -369,7 +423,7 @@ def build_ui() -> gr.Blocks:
                     label="Джерело даних",
                 )
 
-                # ── Кнопка Browse (прихована за замовчуванням) ─────────────────
+                # ── Кнопка Browse (PDF / MD / dir) ─────────────────────────
                 browse_btn = gr.Button(
                     "📂  Відкрити File Explorer",
                     variant="secondary",
@@ -377,7 +431,15 @@ def build_ui() -> gr.Blocks:
                     elem_classes=["browse-btn"],
                 )
 
-                # ── Textbox (основний ввід) ───────────────────────────────────
+                # ── Кнопка Discover URL (HITL) ────────────────────────────
+                discover_btn = gr.Button(
+                    "🔎  Шукати URL",
+                    variant="secondary",
+                    visible=False,
+                    elem_classes=["discover-btn"],
+                )
+
+                # ── Textbox ───────────────────────────────────────────────
                 raw_input = gr.Textbox(
                     label="Вхідні дані",
                     placeholder=INPUT_PLACEHOLDERS[SOURCE_CHOICES[0]],
@@ -391,18 +453,11 @@ def build_ui() -> gr.Blocks:
                     elem_classes=["generate-btn"],
                 )
 
-                gr.Markdown(
-                    "_Auto-search (URL Discovery) недоступний у GUI — "
-                    "використовуйте URL або текст._",
-                    visible=True,
-                )
-
-            # ══════════════════════════════════════════════════════════════════
-            # ПРАВА ПАНЕЛЬ — моніторинг + preview
-            # ══════════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════
+            # ПРАВА ПАНЕЛЬ
+            # ══════════════════════════════════════════════════════════════
             with gr.Column(scale=2, min_width=520):
 
-                # ── Лог агентів ───────────────────────────────────────────────
                 gr.Markdown("### 📊 Лог виконання агентів")
                 log_output = gr.Textbox(
                     label="",
@@ -417,24 +472,19 @@ def build_ui() -> gr.Blocks:
                     elem_classes=["log-area"],
                 )
 
-                # ── Результати (приховані до завершення генерації) ────────────
                 with gr.Column(visible=False) as results_col:
 
                     gr.Markdown("### 👁️ Preview результату")
 
                     with gr.Row():
                         lang_dropdown = gr.Dropdown(
-                            choices=[],
-                            value=None,
+                            choices=[], value=None,
                             label="Мова / версія",
-                            scale=2,
-                            interactive=True,
+                            scale=2, interactive=True,
                         )
                         download_file = gr.File(
                             label="📦 Завантажити ZIP",
-                            visible=False,
-                            scale=1,
-                            interactive=False,
+                            visible=False, scale=1, interactive=False,
                         )
 
                     preview_html = gr.HTML(
@@ -443,20 +493,27 @@ def build_ui() -> gr.Blocks:
                         elem_classes=["preview-frame"],
                     )
 
-        # ── Events ────────────────────────────────────────────────────────────
+        # ── Events ────────────────────────────────────────────────────────
 
-        # Перемикання джерела → показати/сховати кнопку Browse
+        # Перемикання джерела → показати/сховати кнопки
         source_radio.change(
             fn=on_source_change,
             inputs=[source_radio],
-            outputs=[raw_input, browse_btn],
+            outputs=[raw_input, browse_btn, discover_btn],
         )
 
-        # Кнопка Browse → відкриває нативний File Explorer → шляхи в textbox
+        # Browse → нативний File Explorer → шляхи в textbox
         browse_btn.click(
             fn=on_browse_click,
             inputs=[source_radio, raw_input],
             outputs=[raw_input],
+        )
+
+        # Discover → URL Discovery агент → URL в textbox + перемикання на "urls"
+        discover_btn.click(
+            fn=discover_urls,
+            inputs=[product_input, site_dropdown],
+            outputs=[log_output, raw_input, source_radio],
         )
 
         # Генерація
