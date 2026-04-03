@@ -141,10 +141,7 @@ class QAVerdict(BaseModel):
         default_factory=list,
         description="Required sections (e.g., FAQ, Troubleshooting) missing from the draft."
     )
-    approved_text: Optional[str] = Field(
-        default=None,
-        description="The final vetted English text. Populated ONLY if status is APPROVED."
-    )
+    # ВИДАЛЕНО ПОЛЕ approved_text !!!
     expert_insight_present: bool = Field(
         default=False,
         description="Whether an Expert Verdict block with at least one cited metric is present."
@@ -513,11 +510,13 @@ class ECommerceContentCrew:
             agent=self._frontend_developer,
             context=[
                 self._tasks['tech_specs'],  # ← Для таблиці специфікацій + зображення
-                self._tasks['qa']           # ← Затверджений текст
+                self._tasks['copywriting'], # ← ДОДАНО! HTML-кодер бере текст напряму від копірайтера
+                self._tasks['qa']           # ← Отримує вердикт QA (щоб знати, що текст approved)
             ]
         )
         self._tasks['html'] = task
         return task
+
 
     def create_crew(self, tasks_to_run: list, task_callback=None) -> Crew:
         """Створює Crew з послідовним процесом."""
@@ -534,7 +533,7 @@ class ECommerceContentCrew:
             agents=unique_agents,
             tasks=tasks_to_run,
             process=Process.sequential,
-            memory=True,
+            memory=False,
             cache=True,
             verbose=True,
             task_callback=task_callback

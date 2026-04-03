@@ -267,7 +267,9 @@ quality_assurance_task:
     - fact_errors: list of specific inaccuracies (empty if none)
     - external_links_found: list of forbidden URLs (empty if none)
     - missing_sections: list of required sections not present (empty if none)
-    - approved_text: the final vetted English text (only if APPROVED)
+    - expert_insight_present: boolean
+    - technical_tip_present: boolean
+    DO NOT output the approved text. ONLY output the JSON verification object.
   agent: editor_qa
 
 # tasks.yaml — REPLACE html_integration_task ENTIRELY
