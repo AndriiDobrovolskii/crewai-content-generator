@@ -1,3 +1,32 @@
-.env
+# Python
+.venv/
+venv/
+env/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Env / secrets
+.env
+.env.local
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Output / generated
+output/
+
+# OS
+Thumbs.db
 .DS_Store
+
+# Logs
+*.log
