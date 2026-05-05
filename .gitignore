@@ -19,3 +19,5 @@ output/
 .gemini/
 .agent/
 brain/
+node_modules/
+frontend/node_modules/
