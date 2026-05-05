@@ -41,7 +41,7 @@ class ContentSimilarityTool(BaseTool):
     name: str = "Similarity Checker"
     description: str = (
         "Compares the copywriter's generated text against the original manufacturer source text "
-        "to measure plagiarism. Returns PASSED (>80% unique) or FAILED (<80% unique). "
+        "to measure plagiarism. Returns PASSED (>= 80% unique) or FAILED (< 80% unique). "
         "IMPORTANT: Pass the RAW SOURCE as 'source_text' and the COPYWRITER'S DRAFT as 'generated_text'. "
         "Both inputs must be plain text strings, not dicts or lists."
     )
@@ -180,8 +180,10 @@ class USMeasurementCalculatorTool(BaseTool):
     }
 
     def _format_number(self, val: float) -> str:
-        """Форматує число: 11.0 → '11', 11.81 → '11.81'."""
-        return f"{int(val)}" if val == int(val) else f"{val}"
+        """Форматує число: 11.0 → '11', 11.81 → '11.81', 8.46 → '8.46'."""
+        # f"{val}" може дати '8.466666666666667' для дробів після float-арифметики.
+        # f"{val:.2f}" дає фіксовану точність, rstrip прибирає зайві нулі.
+        return f"{val:.2f}".rstrip('0').rstrip('.')
 
     def _convert_single(self, value: float, unit: str, label: Optional[str]) -> str:
         """Конвертує одне значення."""
@@ -220,7 +222,11 @@ class USMeasurementCalculatorTool(BaseTool):
         results = []
         for item in conversions:
             if isinstance(item, dict):
-                val = item.get('value', 0)
+                val = item.get('value')
+                if val is None:
+                    label = item.get('label', 'Unknown')
+                    results.append(f"{label}: Error — missing 'value' field in conversion input")
+                    continue
                 unit = item.get('unit', '')
                 label = item.get('label')
             elif isinstance(item, SingleConversion):

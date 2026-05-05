@@ -14,5 +14,5 @@ paths:
 - Ukrainian-first: always generate UA before other languages
 - `ua_is_production` determines if UA is production or review artifact
 - LLM per role: cheap for search, expensive for writing — override via `.env`
-- `Process.sequential` with `memory=True, cache=True` for all Crews
+- `Process.sequential` with `cache=True` for all Crews; `memory=False` for `ECommerceContentCrew`, `memory=True` for `LocalizationCrew`
 - Windows UTF-8: stdout/stderr wrappers at top of main.py are mandatory

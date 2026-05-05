@@ -139,25 +139,31 @@ def _extract_pdf_with_gemini(pdf_path: str) -> str:
     )
 
     print(f"   🤖 Gemini ({GEMINI_PDF_MODEL}) обробляє PDF...")
-    response = model.generate_content(
-        [uploaded_file, prompt],
-        generation_config=genai.types.GenerationConfig(
-            temperature=0.1,  # Мінімальна креативність для точного extraction
-            max_output_tokens=8192,
-        )
-    )
-
-    # Очищаємо завантажений файл з Gemini
     try:
-        genai.delete_file(uploaded_file.name)
-    except Exception:
-        pass  # Не критично якщо не вдалось видалити
-
-    text = response.text
-    if not text or len(text.strip()) < MIN_PDF_TEXT_LENGTH:
-        raise ValueError(f"Gemini повернув замало тексту ({len(text)} символів).")
-
-    return text
+        response = model.generate_content(
+            [uploaded_file, prompt],
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.1,  # Мінімальна креативність для точного extraction
+                max_output_tokens=8192,
+            )
+        )
+        candidate = response.candidates[0] if response.candidates else None
+        if not candidate or candidate.finish_reason.name != "STOP":
+            reason = candidate.finish_reason.name if candidate else "NO_CANDIDATE"
+            raise ValueError(
+                f"Gemini відхилив PDF: finish_reason={reason}. "
+                "Перевірте вміст файлу або спробуйте інший."
+            )
+        text = response.text
+        if not text or len(text.strip()) < MIN_PDF_TEXT_LENGTH:
+            raise ValueError(f"Gemini повернув замало тексту ({len(text)} символів).")
+        return text
+    finally:
+        # Завжди видаляємо завантажений файл, навіть якщо generate_content кинув виключення
+        try:
+            genai.delete_file(uploaded_file.name)
+        except Exception:
+            pass
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -261,7 +267,7 @@ _FRONT_MATTER_RE = re.compile(
 # Markdown syntax patterns для нормалізації
 _MD_HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 _MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*|__(.+?)__')
-_MD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)')
+_MD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)([^*\n]{1,200})(?<!\*)\*(?!\*)|(?<!_)_(?!_)([^_\n]{1,200})(?<!_)_(?!_)')
 _MD_STRIKE_RE = re.compile(r'~~(.+?)~~')
 _MD_CODE_INLINE_RE = re.compile(r'`([^`]+)`')
 _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
@@ -403,16 +409,19 @@ def extract_text_from_md(md_path: str) -> str:
     print(f"\n📝 MD: {os.path.basename(md_path)} ({file_size_kb:.1f} KB)")
 
     # --- Read ---
-    try:
-        with open(md_path, 'r', encoding='utf-8') as f:
-            raw_content = f.read()
-    except UnicodeDecodeError:
-        # Fallback для файлів без BOM або у Windows-кодуванні
+    # Каскад кодувань: utf-8 → utf-8-sig (BOM) → cp1252 (Windows ANSI) → latin-1 (завжди читає)
+    raw_content = None
+    for enc in ('utf-8', 'utf-8-sig', 'cp1252', 'latin-1'):
         try:
-            with open(md_path, 'r', encoding='utf-8-sig') as f:
+            with open(md_path, 'r', encoding=enc) as f:
                 raw_content = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
         except Exception as e:
             return f"[ПОМИЛКА] Не вдалося прочитати MD файл ({e}): {md_path}"
+    if raw_content is None:
+        return f"[ПОМИЛКА] Не вдалося розпізнати кодування MD файлу: {md_path}"
 
     if not raw_content.strip():
         return f"[ПОМИЛКА] MD файл порожній: {md_path}"
@@ -637,11 +646,11 @@ def _scrape_with_requests(url: str) -> str:
     response = requests.get(url, headers=DEFAULT_HEADERS, timeout=20)
     response.raise_for_status()
 
-    # Автодетект кодування (requests іноді помиляється з ISO-8859-1)
-    if response.encoding and response.encoding.lower() == 'iso-8859-1':
-        response.encoding = response.apparent_encoding
-
-    soup = BeautifulSoup(response.content, 'html.parser')
+    # Автодетект кодування через apparent_encoding (requests часто помиляється з ISO-8859-1).
+    # Передаємо from_encoding у BS4, бо BeautifulSoup отримує bytes (response.content),
+    # тому response.encoding не впливає на парсинг — треба явно вказати кодування.
+    apparent = response.apparent_encoding or 'utf-8'
+    soup = BeautifulSoup(response.content, 'html.parser', from_encoding=apparent)
     text = _preserve_media_and_get_text(soup, base_url=url)
 
     if len(text) < MIN_CONTENT_LENGTH:

@@ -1,7 +1,8 @@
+import copy
 import os
 import yaml
 from typing import Any, List, Dict, Optional, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai_tools import SerperDevTool, WebsiteSearchTool, PDFSearchTool
 
@@ -19,10 +20,28 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 agents_config_path = os.path.join(current_dir, 'config', 'agents.yaml')
 tasks_config_path = os.path.join(current_dir, 'config', 'tasks.yaml')
 
-with open(agents_config_path, 'r', encoding='utf-8') as f:
-    agents_config = yaml.safe_load(f)
-with open(tasks_config_path, 'r', encoding='utf-8') as f:
-    tasks_config = yaml.safe_load(f)
+
+def _load_yaml_config(path: str) -> dict:
+    """Завантажує YAML-конфіг з явними повідомленнями замість import-time crash."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Config must be a YAML mapping (dict), got {type(data).__name__}: {path}"
+            )
+        return data
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Config file not found: {path}\n"
+            "Run from the project root or verify that the config/ directory exists."
+        ) from None
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML syntax in {path}: {e}") from e
+
+
+agents_config = _load_yaml_config(agents_config_path)
+tasks_config = _load_yaml_config(tasks_config_path)
 
 
 # =====================================================================
@@ -92,7 +111,7 @@ class TechSpecsOutput(BaseModel):
         )
     )
     Support_Data: SupportData = Field(
-        ...,
+        default_factory=SupportData,
         description="Extracted FAQs and Troubleshooting data for GEO schema generation."
     )
     Official_Images: List[ProductImage] = Field(
@@ -116,7 +135,9 @@ class TechSpecsOutput(BaseModel):
             elif isinstance(fields, list):
                 normalized[category] = {'value': ', '.join(str(i) for i in fields)}
             else:
-                normalized[category] = fields
+                # Scalar або None — загортаємо у dict щоб задовольнити Dict[str, str] типізацію.
+                # Без цього Pydantic кидає ValidationError після повернення з validators.
+                normalized[category] = {'value': str(fields)} if fields is not None else {}
         return normalized
 
 
@@ -150,6 +171,17 @@ class QAVerdict(BaseModel):
         default=False,
         description="Whether a practitioner-level Technical Tip blockquote is present."
     )
+
+    @model_validator(mode='after')
+    def check_status_score_consistency(self) -> 'QAVerdict':
+        """APPROVED вимагає uniqueness_score >= 80.0; нижче — суперечливий вердикт."""
+        if self.status == "APPROVED" and self.uniqueness_score < 80.0:
+            raise ValueError(
+                f"Contradictory verdict: APPROVED requires uniqueness_score >= 80.0, "
+                f"got {self.uniqueness_score:.1f}%. "
+                "Set status to REJECTED or increase the uniqueness score."
+            )
+        return self
 
 
 # =====================================================================
@@ -384,6 +416,16 @@ class ECommerceContentCrew:
         ]
         return any(kw in product_name.lower() for kw in filament_keywords)
 
+    def _require_task(self, name: str) -> Task:
+        """Повертає ініціалізовану задачу або кидає RuntimeError з діагностикою."""
+        if name not in self._tasks:
+            raise RuntimeError(
+                f"Task '{name}' has not been initialized yet. "
+                f"Call the corresponding task method before referencing it in context. "
+                f"Currently available tasks: {list(self._tasks.keys())}"
+            )
+        return self._tasks[name]
+
     # --- ІНІЦІАЛІЗАЦІЯ ЗАДАЧ ---
 
     def url_discovery_task(self, product_name: str) -> Task:
@@ -399,7 +441,7 @@ class ECommerceContentCrew:
         task = Task(
             config=tasks_config['content_extraction_task'],
             agent=self._web_researcher,
-            context=[self._tasks['url_discovery']],  # ← Явна залежність
+            context=[self._require_task('url_discovery')],  # ← Явна залежність
             human_input=True  # 🛑 Зупинка №2: оператор перевіряє контент
         )
         self._tasks['content_extraction'] = task
@@ -435,7 +477,7 @@ class ECommerceContentCrew:
         )
 
     def tech_specs_extraction_task(self, product_name: str) -> Task:
-        config = tasks_config['tech_specs_extraction_task'].copy()
+        config = copy.deepcopy(tasks_config['tech_specs_extraction_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
 
         if self._is_filament(product_name):
@@ -459,42 +501,42 @@ class ECommerceContentCrew:
         return task
 
     def seo_strategy_task(self) -> Task:
-        config = tasks_config['seo_strategy_task'].copy()
+        config = copy.deepcopy(tasks_config['seo_strategy_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
 
         task = Task(
             config=config,
             agent=self._seo_strategist,
-            context=[self._tasks['tech_specs']]  # ← Отримує структурований JSON
+            context=[self._require_task('tech_specs')]  # ← Отримує структурований JSON
         )
         self._tasks['seo_strategy'] = task
         return task
 
     def copywriting_task(self) -> Task:
-        config = tasks_config['copywriting_task'].copy()
+        config = copy.deepcopy(tasks_config['copywriting_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
 
         task = Task(
             config=config,
             agent=self._copywriter,
             context=[
-                self._tasks['tech_specs'],    # ← Сирі специфікації (ground truth)
-                self._tasks['seo_strategy']   # ← SEO-бриф зі структурою H2/H3
+                self._require_task('tech_specs'),    # ← Сирі специфікації (ground truth)
+                self._require_task('seo_strategy')   # ← SEO-бриф зі структурою H2/H3
             ]
         )
         self._tasks['copywriting'] = task
         return task
 
     def quality_assurance_task(self) -> Task:
-        config = tasks_config['quality_assurance_task'].copy()
+        config = copy.deepcopy(tasks_config['quality_assurance_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
 
         task = Task(
             config=config,
             agent=self._editor_qa,
             context=[
-                self._tasks['tech_specs'],   # ← Ground truth для перевірки фактів
-                self._tasks['copywriting']   # ← Чернетка для рев'ю
+                self._require_task('tech_specs'),   # ← Ground truth для перевірки фактів
+                self._require_task('copywriting')   # ← Чернетка для рев'ю
             ],
             output_pydantic=QAVerdict  # ← Структурований вердикт
         )
@@ -502,16 +544,16 @@ class ECommerceContentCrew:
         return task
 
     def html_integration_task(self) -> Task:
-        config = tasks_config['html_integration_task'].copy()
+        config = copy.deepcopy(tasks_config['html_integration_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
 
         task = Task(
             config=config,
             agent=self._frontend_developer,
             context=[
-                self._tasks['tech_specs'],  # ← Для таблиці специфікацій + зображення
-                self._tasks['copywriting'], # ← ДОДАНО! HTML-кодер бере текст напряму від копірайтера
-                self._tasks['qa']           # ← Отримує вердикт QA (щоб знати, що текст approved)
+                self._require_task('tech_specs'),  # ← Для таблиці специфікацій + зображення
+                self._require_task('copywriting'),  # ← HTML-кодер бере текст напряму від копірайтера
+                self._require_task('qa')            # ← Отримує вердикт QA (щоб знати, що текст approved)
             ]
         )
         self._tasks['html'] = task
@@ -588,11 +630,14 @@ class LocalizationCrew:
         )
 
     def crew(self, task_callback=None) -> Crew:
+        # memory=True потребує OpenAI embeddings API; вмикаємо лише якщо ключ присутній.
+        # Це дозволяє використовувати Gemini-only setup без падіння Phase 2.
+        memory_enabled = bool(os.getenv("OPENAI_API_KEY"))
         return Crew(
             agents=[self._localizer],
             tasks=[self.localization_task()],
             process=Process.sequential,
-            memory=True,
+            memory=memory_enabled,
             cache=True,
             verbose=True,
             task_callback=task_callback

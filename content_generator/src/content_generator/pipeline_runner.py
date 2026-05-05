@@ -26,6 +26,11 @@ _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _INVALID_CHARS = r'[\\/:*?"<>|()]'
 _URL_PATTERN = re.compile(r'https?://[^\s,\)\"\'>]+')  # Витяг URL з виводу агента
 
+# Per-thread storage for the active GUI callback.
+# Each thread that enters a _ThreadLocalStdout context manager gets its own
+# callback slot; threads without an active slot see None and are not routed.
+_thread_local = threading.local()
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
@@ -43,21 +48,32 @@ def _save_html(output_dir: str, filename: str, html_content: str) -> str:
 
 
 class _ThreadLocalStdout:
-    """Перехоплює stdout тільки для цільового потоку; інші потоки пишуть у оригінал."""
+    """Перехоплює stdout для всіх потоків; callback маршрутизується через threading.local().
 
-    def __init__(self, callback: Callable[[str], None], target_thread_id: int):
+    sys.stdout swap залишається (необхідний щоб перехоплювати print()), але
+    вибір callback-а є per-thread через _thread_local.callback — тому
+    два паралельних pipeline-и не перезаписують один одному callback.
+    """
+
+    def __init__(self, callback: Callable[[str], None], target_thread_id: int | None):
+        # target_thread_id зберігається для сумісності з існуючими call-site-ами,
+        # але більше не використовується для маршрутизації — це робить _thread_local.
         self._orig = sys.stdout
         self._callback = callback
-        self._target = target_thread_id
         self._lock = threading.Lock()
 
     def write(self, text: str) -> int:
-        self._orig.write(text)
-        if threading.current_thread().ident == self._target:
-            clean = _strip_ansi(text)
-            if clean.strip():
-                with self._lock:
-                    self._callback(clean + "\n" if not clean.endswith("\n") else clean)
+        # BUG-17: callback lookup через thread-local замість self._target порівняння.
+        cb = getattr(_thread_local, 'callback', None)
+        # BUG-16: _orig.write всередині lock — серіалізує термінальний вивід
+        #         від усіх потоків, що пишуть через цей екземпляр.
+        with self._lock:
+            self._orig.write(text)
+            # BUG-18: перевіряємо text (до ANSI-strip) — так ANSI-only рядки
+            #         не відфільтровують контент, який реально є у вхідному тексті.
+            if cb is not None and text.strip():
+                clean = _strip_ansi(text)
+                cb(clean if clean.endswith("\n") else clean + "\n")
         return len(text)
 
     def flush(self) -> None:
@@ -67,11 +83,17 @@ class _ThreadLocalStdout:
         return self._orig.fileno()
 
     def __enter__(self) -> "_ThreadLocalStdout":
+        # BUG-17: реєструємо callback у thread-local ДО підміни sys.stdout,
+        #         щоб перший же write() від цього потоку вже бачив свій callback.
+        _thread_local.callback = self._callback
         sys.stdout = self
         return self
 
     def __exit__(self, *_: Any) -> None:
         sys.stdout = self._orig
+        # BUG-17: знімаємо реєстрацію — після виходу з блоку цей потік
+        #         більше не є "активним" і його print()-и не йдуть у callback.
+        _thread_local.callback = None
 
 
 def _make_task_callback(log_cb: Callable[[str], None]) -> Callable:
@@ -100,7 +122,7 @@ def _parse_urls_from_output(raw_output: str) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
     for url in urls:
-        url = url.rstrip(".,;:)>]")  # Прибираємо trailing пунктуацію
+        url = re.sub(r'[.,;:)>\]]+$', '', url)  # Прибираємо trailing пунктуацію
         if url not in seen:
             seen.add(url)
             unique.append(url)
