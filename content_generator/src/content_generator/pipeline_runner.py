@@ -424,7 +424,6 @@ def run_pipeline_headless(
         ]
 
         active_core_crew = core_crew_module.create_crew(tasks_to_run, task_callback=task_cb)
-        _snap_before = PipelineCostTracker.snapshot_llm(active_core_crew)
         with stdout_ctx:
             core_result = active_core_crew.kickoff(inputs=core_inputs)
 
@@ -432,8 +431,7 @@ def run_pipeline_headless(
         if cost_tracker is not None:
             cost_tracker.register_kickoff(
                 crew_label="Phase 1: Core",
-                before_snapshot=_snap_before,
-                after_snapshot=PipelineCostTracker.snapshot_llm(active_core_crew),
+                usage_metrics=getattr(core_result, "token_usage", None),
                 primary_model="gpt-4o",
                 task_outputs=getattr(core_result, "tasks_output", None),
             )
@@ -472,7 +470,6 @@ def run_pipeline_headless(
             base_html=base_english_html,
         )
         ua_crew = ua_crew_module.crew(task_callback=task_cb)
-        _snap_before_ua = PipelineCostTracker.snapshot_llm(ua_crew)
         with stdout_ctx:
             ua_result = ua_crew.kickoff(inputs=ua_inputs)
 
@@ -480,8 +477,7 @@ def run_pipeline_headless(
         if cost_tracker is not None:
             cost_tracker.register_kickoff(
                 crew_label=f"Phase 2: {ua_label}",
-                before_snapshot=_snap_before_ua,
-                after_snapshot=PipelineCostTracker.snapshot_llm(ua_crew),
+                usage_metrics=getattr(ua_result, "token_usage", None),
                 primary_model="gpt-4o",
                 task_outputs=getattr(ua_result, "tasks_output", None),
             )
@@ -509,7 +505,6 @@ def run_pipeline_headless(
                 base_html=base_english_html,
             )
             loc_crew = loc_crew_module.crew(task_callback=task_cb)
-            _snap_before_loc = PipelineCostTracker.snapshot_llm(loc_crew)
             with stdout_ctx:
                 loc_result = loc_crew.kickoff(inputs=loc_inputs)
 
@@ -517,8 +512,7 @@ def run_pipeline_headless(
             if cost_tracker is not None:
                 cost_tracker.register_kickoff(
                     crew_label=f"Phase 2: {language}",
-                    before_snapshot=_snap_before_loc,
-                    after_snapshot=PipelineCostTracker.snapshot_llm(loc_crew),
+                    usage_metrics=getattr(loc_result, "token_usage", None),
                     primary_model="gpt-4o",
                     task_outputs=getattr(loc_result, "tasks_output", None),
                 )

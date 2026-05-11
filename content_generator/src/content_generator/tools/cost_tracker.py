@@ -297,17 +297,6 @@ class PipelineCostTracker:
         except (TypeError, ValueError):
             return default
 
-    @staticmethod
-    def snapshot_llm(crew_obj: Any) -> dict[str, int]:
-        """Знімає поточний стан _token_usage з усіх LLM в crew."""
-        totals: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
-        for agent in getattr(crew_obj, "agents", []):
-            llm = getattr(agent, "llm", None)
-            if llm and hasattr(llm, "_token_usage"):
-                totals["prompt_tokens"]    += llm._token_usage.get("prompt_tokens", 0)
-                totals["completion_tokens"] += llm._token_usage.get("completion_tokens", 0)
-        return totals
-
     # ─────────────────────────────────────────────────────────────────
     # REGISTRATION METHODS — усі failure-isolated
     # ─────────────────────────────────────────────────────────────────
@@ -315,15 +304,18 @@ class PipelineCostTracker:
     def register_kickoff(
         self,
         crew_label: str,
-        before_snapshot: dict[str, int],
-        after_snapshot: dict[str, int],
+        usage_metrics: Any,
         primary_model: str = "gpt-4o",
         task_outputs: Optional[list] = None,
     ) -> None:
-        """Реєструє один CrewAI kickoff. Failure-isolated."""
+        """Реєструє один CrewAI kickoff. Failure-isolated.
+
+        usage_metrics: CrewOutput.token_usage (UsageMetrics Pydantic object)
+        з prompt_tokens / completion_tokens / total_tokens.
+        """
         try:
-            input_t  = after_snapshot["prompt_tokens"]    - before_snapshot["prompt_tokens"]
-            output_t = after_snapshot["completion_tokens"] - before_snapshot["completion_tokens"]
+            input_t  = self._safe_attr(usage_metrics, "prompt_tokens")
+            output_t = self._safe_attr(usage_metrics, "completion_tokens")
 
             agg_cost, unknown = self._calc_llm_cost(primary_model, input_t, output_t)
 
