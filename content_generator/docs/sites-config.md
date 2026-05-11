@@ -9,8 +9,8 @@ Single source of truth for all store parameters. Defined in `crew.py`.
 | 3DDevice | Ukraine | Ukrainian, English, Russian | `localizer_ua` | Yes |
 | 3DPrinter | Ukraine | Ukrainian, English, Russian | `localizer_ua` | Yes |
 | 3DScanner | Ukraine | Ukrainian, English, Russian | `localizer_ua` | Yes |
-| Center 3D Print | Poland | Polish, German, English, Ukrainian, Russian | `localizer_pl` | No |
-| EXPERT3D | Spain | Spanish (Castilian es-ES) | `localizer_es` | No |
+| Center 3D Print | Poland | Polish, German, English, Ukrainian, Russian | `localizer_pl` | Yes |
+| EXPERT3D | Spain | Spanish (Castilian es-ES), Ukrainian | `localizer_es` | Yes |
 | Expert-3DPrinter | USA | American English, US Spanish | `localizer_us` | No |
 
 ### ua_is_production flag

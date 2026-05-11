@@ -1,0 +1,59 @@
+# =============================================================================
+# Pipeline Cost Tracker — Pricing Configuration
+# =============================================================================
+# Розташування у проєкті: src/content_generator/config/pricing.yaml
+#
+# Призначення: Єдине джерело істини для USD-per-token цін усіх моделей,
+#              які використовуються у CrewAI content generation pipeline.
+#
+# КРИТИЧНО: Усі значення — USD per 1,000,000 tokens (per-million convention).
+#           Зберігаються як quoted strings → парсяться у Decimal → нуль float drift.
+#
+# Оновлюй цей файл коли:
+#   - OpenAI / Google / Anthropic публікують нові тарифи
+#   - Додаєш нову модель у pipeline (researcher_llm, etc.)
+#   - Переключаєшся на інший snapshot існуючої моделі
+#
+# Перевірка тарифів: https://openai.com/api/pricing/
+# Останнє оновлення: 2026-05-10  ← ОНОВИ ЦЮ ДАТУ ПРИ ЗМІНІ ТАРИФІВ
+# =============================================================================
+
+models:
+  # ── OpenAI GPT-4o (latest pointer). Snapshots можуть відрізнятися.
+  gpt-4o:
+    input_per_million:  "2.50"
+    output_per_million: "10.00"
+
+  # ── Дешевший варіант — поточний default для web_researcher
+  gpt-4o-mini:
+    input_per_million:  "0.15"
+    output_per_million: "0.60"
+
+  # ── Embeddings — використовуються коли LocalizationCrew має memory=True
+  text-embedding-3-small:
+    input_per_million:  "0.02"
+    output_per_million: "0.02"   # embeddings: лише input, але schema уніфікована
+
+  # ── Backwards compat — pre-migration analyst_llm
+  gemini-1.5-pro:
+    input_per_million:  "1.25"
+    output_per_million: "5.00"
+
+  # ── Якщо в майбутньому повернеш Gemini 2.0
+  # gemini-2.0-flash:
+  #   input_per_million:  "0.10"
+  #   output_per_million: "0.40"
+
+
+# =============================================================================
+# External APIs — flat fees, не token-based
+# =============================================================================
+# cost_per_call_usd:  null     →  виключити з cost report (для unmetered APIs)
+#                     "0.001"  →  flat fee per call
+
+external_apis:
+  serper_dev:
+    cost_per_call_usd: "0.001"   # ← ВЕРИФІКУЙ ТВІЙ ПЛАН: $0.001-$0.003 типово
+
+  dataforseo:
+    cost_per_call_usd: null      # placeholder — заповнити при міграції

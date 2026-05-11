@@ -321,6 +321,7 @@ def generate_content(
         gr.update(value=None, visible=False),
         gr.update(visible=False),
         {},
+        gr.update(value="", visible=False),
     )
     while True:
         kind, payload = log_q.get()
@@ -336,6 +337,8 @@ def generate_content(
         return
 
     files: dict[str, str] = pipeline_result.get("files", {})
+    cost_report = pipeline_result.get("cost_report")
+    cost_report_label = f"💰 Cost report: {cost_report}" if cost_report else ""
     zip_path: str | None = pipeline_result.get("zip_path")
     lang_list = list(files.keys())
     first_lang = lang_list[0] if lang_list else None
@@ -349,6 +352,7 @@ def generate_content(
         gr.update(value=zip_path, visible=bool(zip_path)),
         gr.update(visible=bool(files)),
         files,
+        gr.update(value=cost_report_label, visible=bool(cost_report)),
     )
 
 
@@ -486,6 +490,7 @@ def build_ui() -> gr.Blocks:
                             label="📦 Завантажити ZIP",
                             visible=False, scale=1, interactive=False,
                         )
+                        cost_report_md = gr.Markdown(value="", visible=False, scale=2)
 
                     preview_html = gr.HTML(
                         value="",
@@ -527,6 +532,7 @@ def build_ui() -> gr.Blocks:
                 download_file,
                 results_col,
                 files_state,
+                cost_report_md,
             ],
         )
 

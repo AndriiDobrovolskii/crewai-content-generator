@@ -53,7 +53,7 @@ tasks_config = _load_yaml_config(tasks_config_path)
 # - gpt-4o: копірайтинг, SEO, HTML, локалізація (висока точність)
 
 researcher_llm = LLM(model=os.getenv("RESEARCHER_MODEL", "gpt-4o-mini"))
-analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gemini/gemini-1.5-pro"))
+analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gpt-4o"))
 writer_llm = LLM(model=os.getenv("WRITER_MODEL", "gpt-4o"))
 frontend_llm = LLM(model=os.getenv("FRONTEND_MODEL", "gpt-4o"))
 localizer_llm = LLM(model=os.getenv("LOCALIZER_MODEL", "gpt-4o"))
@@ -195,8 +195,11 @@ MARKET_RULES = {
     "localizer_ua": """
 UKRAINIAN MARKET RULES (UA):
 - Punctuation: word after colon (:) starts with lowercase, unless a proper noun.
-- Logistics: Use Nova Poshta / Ukrposhta for delivery references.
-- Audience: Ukrainian engineers, makers, small businesses.
+- Logistics: PRESERVE delivery/carrier references from the source HTML.
+  Do NOT substitute or hardcode Ukrainian-only carriers (Nova Poshta, Укрпошта).
+  The source HTML already contains store-appropriate logistics from cta_context;
+  your job is faithful Ukrainian translation, not market substitution.
+- Audience: Ukrainian-speaking engineers, makers, small businesses (regardless of where the store ships from).
 - Terminology: Use professional Ukrainian 3D printing terminology.
 - Do NOT default to Russian unless {target_language} explicitly requires it.
 """,
@@ -340,13 +343,13 @@ SITES_CONFIG = {
         "country": "Poland",
         "languages": ["Polish", "German", "English", "Ukrainian", "Russian"],
         "localizer": "localizer_pl",
-        "ua_is_production": False
+        "ua_is_production": True
     },
     "EXPERT3D": {
         "country": "Spain",
-        "languages": ["Spanish (Castilian es-ES)"],
+        "languages": ["Spanish (Castilian es-ES)", "Ukrainian"],
         "localizer": "localizer_es",
-        "ua_is_production": False
+        "ua_is_production": True
     },
     "Expert-3DPrinter": {
         "country": "USA",
@@ -630,14 +633,11 @@ class LocalizationCrew:
         )
 
     def crew(self, task_callback=None) -> Crew:
-        # memory=True потребує OpenAI embeddings API; вмикаємо лише якщо ключ присутній.
-        # Це дозволяє використовувати Gemini-only setup без падіння Phase 2.
-        memory_enabled = bool(os.getenv("OPENAI_API_KEY"))
         return Crew(
             agents=[self._localizer],
             tasks=[self.localization_task()],
             process=Process.sequential,
-            memory=memory_enabled,
+            memory=False,
             cache=True,
             verbose=True,
             task_callback=task_callback

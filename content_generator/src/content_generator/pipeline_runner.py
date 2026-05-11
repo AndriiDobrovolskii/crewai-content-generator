@@ -18,7 +18,10 @@ import re
 import shutil
 import sys
 import threading
+from pathlib import Path
 from typing import Any, Callable
+
+from content_generator.tools.cost_tracker import PipelineCostTracker
 
 logger = logging.getLogger(__name__)
 
@@ -246,12 +249,21 @@ def run_pipeline_headless(
         "output_dir": None,
         "zip_path": None,
         "files": {},
+        "cost_report": None,
         "error": None,
     }
 
     def _log(msg: str) -> None:
         if log_callback:
             log_callback(msg)
+
+    # ── Cost tracker (failure-isolated; tracker errors NEVER crash pipeline) ──
+    try:
+        cost_tracker: PipelineCostTracker | None = PipelineCostTracker()
+        cost_tracker.set_context(product_name=product_name, site=site)
+    except Exception as exc:
+        logger.warning(f"Cost tracker init failed — continuing without telemetry: {exc}")
+        cost_tracker = None
 
     # Завантажуємо env після налаштування шляхів
     from dotenv import load_dotenv
@@ -411,9 +423,20 @@ def run_pipeline_headless(
             core_crew_module.html_integration_task(),
         ]
 
+        active_core_crew = core_crew_module.create_crew(tasks_to_run, task_callback=task_cb)
+        _snap_before = PipelineCostTracker.snapshot_llm(active_core_crew)
         with stdout_ctx:
-            active_core_crew = core_crew_module.create_crew(tasks_to_run, task_callback=task_cb)
             core_result = active_core_crew.kickoff(inputs=core_inputs)
+
+        # ── Cost telemetry: Phase 1 ─────────────────────────────────
+        if cost_tracker is not None:
+            cost_tracker.register_kickoff(
+                crew_label="Phase 1: Core",
+                before_snapshot=_snap_before,
+                after_snapshot=PipelineCostTracker.snapshot_llm(active_core_crew),
+                primary_model="gpt-4o",
+                task_outputs=getattr(core_result, "tasks_output", None),
+            )
 
         base_english_html = core_result.raw
         english_filename = f"{folder_name}_BASE_English.html"
@@ -448,9 +471,20 @@ def run_pipeline_headless(
             target_language="Ukrainian",
             base_html=base_english_html,
         )
+        ua_crew = ua_crew_module.crew(task_callback=task_cb)
+        _snap_before_ua = PipelineCostTracker.snapshot_llm(ua_crew)
         with stdout_ctx:
-            ua_crew = ua_crew_module.crew(task_callback=task_cb)
             ua_result = ua_crew.kickoff(inputs=ua_inputs)
+
+        # ── Cost telemetry: Phase 2 Step 1 (Ukrainian) ──────────────
+        if cost_tracker is not None:
+            cost_tracker.register_kickoff(
+                crew_label=f"Phase 2: {ua_label}",
+                before_snapshot=_snap_before_ua,
+                after_snapshot=PipelineCostTracker.snapshot_llm(ua_crew),
+                primary_model="gpt-4o",
+                task_outputs=getattr(ua_result, "tasks_output", None),
+            )
 
         _save_html(output_dir, ua_filename, ua_result.raw)
         result["files"][ua_label] = ua_result.raw
@@ -474,15 +508,37 @@ def run_pipeline_headless(
                 target_language=language,
                 base_html=base_english_html,
             )
+            loc_crew = loc_crew_module.crew(task_callback=task_cb)
+            _snap_before_loc = PipelineCostTracker.snapshot_llm(loc_crew)
             with stdout_ctx:
-                loc_crew = loc_crew_module.crew(task_callback=task_cb)
                 loc_result = loc_crew.kickoff(inputs=loc_inputs)
+
+            # ── Cost telemetry: Phase 2 Step 2 (per-language) ──────
+            if cost_tracker is not None:
+                cost_tracker.register_kickoff(
+                    crew_label=f"Phase 2: {language}",
+                    before_snapshot=_snap_before_loc,
+                    after_snapshot=PipelineCostTracker.snapshot_llm(loc_crew),
+                    primary_model="gpt-4o",
+                    task_outputs=getattr(loc_result, "tasks_output", None),
+                )
 
             safe_lang = language.split(" ")[0]
             filename = f"{folder_name}_{safe_lang}.html"
             _save_html(output_dir, filename, loc_result.raw)
             result["files"][language] = loc_result.raw
             _log(f"  💾 Збережено: {filename}\n")
+
+        # ── Cost report ───────────────────────────────────────────────────
+        if cost_tracker is not None:
+            try:
+                cost_tracker.to_console(_log)
+                cost_report_path = os.path.join(output_dir, "cost_report.json")
+                if cost_tracker.to_json(Path(cost_report_path)) is not None:
+                    _log(f"💾 Cost report збережено: {cost_report_path}\n")
+                    result["cost_report"] = cost_report_path
+            except Exception as cost_exc:
+                logger.warning(f"Cost report dump failed: {cost_exc}")
 
         # ── ZIP-архів ────────────────────────────────────────────────────
         _log("\n📦 Створення ZIP-архіву...\n")
@@ -503,5 +559,16 @@ def run_pipeline_headless(
         logger.exception("Pipeline error")
         result["error"] = str(exc)
         _log(f"\n❌ ПОМИЛКА: {exc}\n")
+
+        # Partial cost report навіть при падінні — forensic data
+        if cost_tracker is not None and result.get("output_dir"):
+            try:
+                partial_path = os.path.join(
+                    result["output_dir"], "cost_report_PARTIAL.json"
+                )
+                cost_tracker.to_json(Path(partial_path))
+                _log(f"💾 Partial cost report (до помилки): {partial_path}\n")
+            except Exception:
+                pass  # Failed forensic dump — silently skip
 
     return result
