@@ -1,5 +1,8 @@
 import copy
+import json
+import logging
 import os
+from pathlib import Path
 import yaml
 from typing import Any, List, Dict, Optional, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -57,6 +60,8 @@ analyst_llm = LLM(model=os.getenv("ANALYST_MODEL", "gpt-4o"))
 writer_llm = LLM(model=os.getenv("WRITER_MODEL", "gpt-4o"))
 frontend_llm = LLM(model=os.getenv("FRONTEND_MODEL", "gpt-4o"))
 localizer_llm = LLM(model=os.getenv("LOCALIZER_MODEL", "gpt-4o"))
+
+logger = logging.getLogger(__name__)
 
 
 # =====================================================================
@@ -139,6 +144,167 @@ class TechSpecsOutput(BaseModel):
                 # Без цього Pydantic кидає ValidationError після повернення з validators.
                 normalized[category] = {'value': str(fields)} if fields is not None else {}
         return normalized
+
+
+# =====================================================================
+# 🖼️ IMAGE STORYBOARD SCHEMAS (v2)
+# =====================================================================
+
+class ImageStoryboardItem(BaseModel):
+    """Один пункт сториборду — план для одного <img> у фінальному HTML."""
+
+    url: str = Field(
+        ...,
+        description="Exact absolute URL of the image (must match Official_Images)."
+    )
+    alt_text: str = Field(
+        ...,
+        min_length=60,
+        max_length=160,
+        description="Screen-reader-friendly description of what is shown. "
+                    "No keyword stuffing, no marketing adjectives. "
+                    "Mentions product name + demonstrated capability."
+    )
+    lead_in_paragraph: str = Field(
+        ...,
+        min_length=20,
+        description="1-3 sentence contextual paragraph inserted immediately "
+                    "above the <img> in HTML. Must reference the image and "
+                    "tie to the surrounding H2 anchor."
+    )
+    placement_anchor: str = Field(
+        ...,
+        description="Exact H2 text from the copywriter's draft where this "
+                    "image is placed, OR the literal string 'HERO' for a "
+                    "hero/overview shot placed between Quick Specs and the "
+                    "first deep-dive H2."
+    )
+    loading_strategy: Literal["eager", "lazy"] = Field(
+        ...,
+        description="'eager' for the order=1 LCP candidate image only. "
+                    "All other images MUST be 'lazy'."
+    )
+    order: int = Field(
+        ...,
+        ge=1,
+        description="Global order index starting at 1. Determines render sequence."
+    )
+
+
+class ImageStoryboard(BaseModel):
+    """Повний typed-контракт між image agent і frontend agent."""
+
+    items: list[ImageStoryboardItem] = Field(
+        default_factory=list,
+        description="Ordered list of image storyboard items. Empty list is valid."
+    )
+
+    @model_validator(mode="after")
+    def _validate_loading_invariants(self) -> "ImageStoryboard":
+        """Інваріант LCP: рівно один eager image, і це item з найменшим order.
+
+        Порожній список — валідний (немає зображень, frontend пропускає рендеринг).
+        """
+        if not self.items:
+            return self
+
+        eager_items = [i for i in self.items if i.loading_strategy == "eager"]
+        if len(eager_items) != 1:
+            raise ValueError(
+                f"ImageStoryboard must have exactly ONE 'eager' image (LCP); "
+                f"found {len(eager_items)}."
+            )
+
+        min_order = min(i.order for i in self.items)
+        if eager_items[0].order != min_order:
+            raise ValueError(
+                f"The 'eager' image must have the lowest order value. "
+                f"Eager has order={eager_items[0].order}, min order={min_order}."
+            )
+
+        urls = [i.url for i in self.items]
+        if len(urls) != len(set(urls)):
+            duplicates = [u for u in urls if urls.count(u) > 1]
+            raise ValueError(
+                f"Duplicate image URLs in storyboard: {set(duplicates)}"
+            )
+
+        return self
+
+
+# =====================================================================
+# 📊 SEO METADATA SCHEMAS (v2)
+# =====================================================================
+
+class SEOMetadataEntry(BaseModel):
+    """Один рядок у seo_metadata.json — метадані для однієї мови."""
+
+    language: str = Field(
+        ...,
+        pattern=r"^[a-z]{2}-[A-Z]{2}$",
+        description="ISO language-region code (e.g., 'en-GB', 'uk-UA', 'es-ES')."
+    )
+    h1: str = Field(
+        ...,
+        min_length=3,
+        max_length=120,
+        description="Clean '[Brand] [Model]' format. NO marketing fluff."
+    )
+    meta_title: str = Field(
+        ...,
+        max_length=55,
+        description="HARD LIMIT 55 chars. Suffix '| {site_name}' mandatory. "
+                    "Max one allowed symbol: ✨ ✅ ➔ ! + % |"
+    )
+    meta_description: str = Field(
+        ...,
+        max_length=155,
+        description="HARD LIMIT 155 chars. Includes currency symbol + 1 hard "
+                    "spec. Ends with localized 'Buy now ➔' (arrow mandatory)."
+    )
+
+    @field_validator("meta_description")
+    @classmethod
+    def _must_end_with_cta_arrow(cls, v: str) -> str:
+        if not v.rstrip().endswith("➔"):
+            raise ValueError(
+                "meta_description must end with the '➔' arrow "
+                "(part of the localized CTA, e.g., 'Buy now ➔')."
+            )
+        return v
+
+    @field_validator("meta_title")
+    @classmethod
+    def _no_forbidden_emojis(cls, v: str) -> str:
+        forbidden_runes = ("📦", "🇺🇸", "🇪🇸", "🇺🇦", "🇵🇱", "🇩🇪", "🇬🇧")
+        for rune in forbidden_runes:
+            if rune in v:
+                raise ValueError(
+                    f"meta_title contains forbidden rune {rune!r}. "
+                    "Allowed symbols (one max): ✨ ✅ ➔ ! + % |"
+                )
+        return v
+
+
+class SEOMetadataBundle(BaseModel):
+    """Артефакт seo_metadata.json — bundle для всіх мов одного site."""
+
+    site_name: str = Field(..., description="Target site (e.g., 'EXPERT3D').")
+    seo_data: list[SEOMetadataEntry] = Field(
+        ...,
+        min_length=1,
+        description="One entry per target language. Order matches site config."
+    )
+
+    @model_validator(mode="after")
+    def _no_duplicate_languages(self) -> "SEOMetadataBundle":
+        langs = [e.language for e in self.seo_data]
+        if len(langs) != len(set(langs)):
+            duplicates = [lang for lang in langs if langs.count(lang) > 1]
+            raise ValueError(
+                f"Duplicate language entries in SEOMetadataBundle: {set(duplicates)}"
+            )
+        return self
 
 
 class QAVerdict(BaseModel):
@@ -323,36 +489,42 @@ CTA_TEMPLATES = {
 SITES_CONFIG = {
     "3DDevice": {
         "country": "Ukraine",
+        "currency_symbol": "грн",
         "languages": ["Ukrainian", "English", "Russian"],
         "localizer": "localizer_ua",
         "ua_is_production": True
     },
     "3DPrinter": {
         "country": "Ukraine",
+        "currency_symbol": "грн",
         "languages": ["Ukrainian", "English", "Russian"],
         "localizer": "localizer_ua",
         "ua_is_production": True
     },
     "3DScanner": {
         "country": "Ukraine",
+        "currency_symbol": "грн",
         "languages": ["Ukrainian", "English", "Russian"],
         "localizer": "localizer_ua",
         "ua_is_production": True
     },
     "Center 3D Print": {
         "country": "Poland",
+        "currency_symbol": "zł",
         "languages": ["Polish", "German", "English", "Ukrainian", "Russian"],
         "localizer": "localizer_pl",
         "ua_is_production": True
     },
     "EXPERT3D": {
         "country": "Spain",
+        "currency_symbol": "€",
         "languages": ["Spanish (Castilian es-ES)", "Ukrainian"],
         "localizer": "localizer_es",
         "ua_is_production": True
     },
     "Expert-3DPrinter": {
         "country": "USA",
+        "currency_symbol": "$",
         "languages": ["American English", "US Spanish"],
         "localizer": "localizer_us",
         "ua_is_production": False
@@ -405,6 +577,16 @@ class ECommerceContentCrew:
         self._frontend_developer = Agent(
             config=agents_config['frontend_developer'],
             llm=frontend_llm,
+            verbose=True
+        )
+
+        # ── Image Intelligence Analyst (NEW v2) ───────────────────────
+        # Generates ImageStoryboard JSON between QA and html_integration.
+        # No tools needed — pure reasoning over tech_specs + copywriting draft.
+        self._image_intelligence_analyst = Agent(
+            config=agents_config['image_intelligence_analyst'],
+            tools=[],
+            llm=writer_llm,
             verbose=True
         )
 
@@ -546,6 +728,30 @@ class ECommerceContentCrew:
         self._tasks['qa'] = task
         return task
 
+    def image_intelligence_task(self) -> Task:
+        """План сториборду зображень: між QA і html_integration.
+
+        Споживає:
+          - tech_specs (для Official_Images URL та контексту)
+          - copywriting (для H2 anchors у draft)
+        Продукує:
+          - ImageStoryboard (Pydantic) — типізований план для frontend.
+        """
+        config = copy.deepcopy(tasks_config['image_intelligence_task'])
+        config['description'] = config['description'] + "\n\n{language_instruction}"
+
+        task = Task(
+            config=config,
+            agent=self._image_intelligence_analyst,
+            context=[
+                self._require_task('tech_specs'),   # Official_Images URL
+                self._require_task('copywriting'),  # H2 anchors з drafted copy
+            ],
+            output_pydantic=ImageStoryboard,
+        )
+        self._tasks['image_intelligence'] = task
+        return task
+
     def html_integration_task(self) -> Task:
         config = copy.deepcopy(tasks_config['html_integration_task'])
         config['description'] = config['description'] + "\n\n{language_instruction}"
@@ -554,9 +760,10 @@ class ECommerceContentCrew:
             config=config,
             agent=self._frontend_developer,
             context=[
-                self._require_task('tech_specs'),  # ← Для таблиці специфікацій + зображення
-                self._require_task('copywriting'),  # ← HTML-кодер бере текст напряму від копірайтера
-                self._require_task('qa')            # ← Отримує вердикт QA (щоб знати, що текст approved)
+                self._require_task('tech_specs'),         # spec tables source of truth
+                self._require_task('copywriting'),        # approved copy text
+                self._require_task('qa'),                 # verdict (approved status)
+                self._require_task('image_intelligence'), # NEW v2 — image storyboard
             ]
         )
         self._tasks['html'] = task
@@ -653,3 +860,152 @@ class LocalizationCrew:
             'base_html': base_html,
             'market_rules': self._get_market_rules()
         }
+
+
+# =====================================================================
+# BLOCK 6 — SEOMetadataCrew (Phase 3 post-pipeline)
+# =====================================================================
+class SEOMetadataCrew:
+    """Невеликий post-pipeline Crew, що генерує seo_metadata.json bundle.
+
+    Запускається ОДИН РАЗ ПІСЛЯ того, як ВСІ мовні файли (EN base +
+    локалізації) згенеровано. Споживає мапу {language: html_content} і
+    повертає Pydantic-валідовану SEOMetadataBundle.
+
+    Архітектурно інкапсульовано окремо від ECommerceContentCrew і
+    LocalizationCrew — це третя фаза пайплайну (post-pipeline hook).
+    """
+
+    def __init__(self) -> None:
+        self._extractor = Agent(
+            config=agents_config['seo_metadata_extractor'],
+            tools=[],
+            llm=writer_llm,
+            verbose=True
+        )
+
+    def seo_metadata_task(self) -> Task:
+        return Task(
+            config=tasks_config['seo_metadata_extraction_task'],
+            agent=self._extractor,
+            output_pydantic=SEOMetadataBundle,
+        )
+
+    def crew(self, task_callback=None) -> Crew:
+        return Crew(
+            agents=[self._extractor],
+            tasks=[self.seo_metadata_task()],
+            process=Process.sequential,
+            memory=False,
+            cache=True,
+            verbose=True,
+            task_callback=task_callback,
+        )
+
+    def get_inputs(
+        self,
+        product_name: str,
+        site_name: str,
+        currency_symbol: str,
+        finalized_html_by_language: dict[str, str],
+        language_instruction: str = "",
+    ) -> dict:
+        """Формує inputs для kickoff.
+
+        Args:
+            product_name: повна назва продукту.
+            site_name: ключ магазину (e.g., 'EXPERT3D').
+            currency_symbol: символ валюти ринку (e.g., '€', 'грн', 'zł').
+            finalized_html_by_language: {iso_code: html_string}, по одному
+                рядку на кожну мову, що має фігурувати у bundle.
+            language_instruction: optional — ціль/мова виводу JSON.
+        """
+        target_languages = sorted(finalized_html_by_language.keys())
+        return {
+            'product_name': product_name,
+            'site_name': site_name,
+            'currency_symbol': currency_symbol,
+            'target_languages': target_languages,
+            'finalized_html_by_language': finalized_html_by_language,
+            'language_instruction': language_instruction,
+        }
+
+
+# =====================================================================
+# BLOCK 7 — run_seo_metadata_post_hook (module-level entry point)
+# =====================================================================
+def run_seo_metadata_post_hook(
+    product_name: str,
+    site_name: str,
+    currency_symbol: str,
+    finalized_html_by_language: dict[str, str],
+    output_dir: str,
+    task_callback=None,
+    cost_tracker=None,
+) -> dict:
+    """Post-pipeline hook: генерує seo_metadata.json після всіх мовних рандів.
+
+    Args:
+        product_name: повна назва продукту.
+        site_name: ключ магазину (e.g., 'EXPERT3D').
+        currency_symbol: символ валюти ринку.
+        finalized_html_by_language: мапа {iso_code: html_string} для всіх
+            мов, що ввійдуть у bundle.
+        output_dir: директорія для запису seo_metadata.json.
+        task_callback: optional CrewAI task callback.
+        cost_tracker: optional PipelineCostTracker для телеметрії.
+
+    Returns:
+        dict з полями:
+            - 'bundle': SEOMetadataBundle | None
+            - 'path': str | None — повний шлях до seo_metadata.json або None
+            - 'error': str | None
+    """
+    result: dict = {'bundle': None, 'path': None, 'error': None}
+
+    try:
+        seo_crew_module = SEOMetadataCrew()
+        seo_inputs = seo_crew_module.get_inputs(
+            product_name=product_name,
+            site_name=site_name,
+            currency_symbol=currency_symbol,
+            finalized_html_by_language=finalized_html_by_language,
+        )
+
+        seo_crew = seo_crew_module.crew(task_callback=task_callback)
+        seo_result = seo_crew.kickoff(inputs=seo_inputs)
+
+        # Cost telemetry (failure-isolated — tracker errors NEVER crash hook)
+        if cost_tracker is not None:
+            try:
+                cost_tracker.register_kickoff(
+                    crew_label="Post-pipeline: SEO Metadata",
+                    usage_metrics=getattr(seo_crew, "usage_metrics", None),
+                    primary_model="gpt-4o",
+                    task_outputs=getattr(seo_result, "tasks_output", None),
+                )
+            except Exception as cost_exc:
+                logger.warning(f"SEO metadata cost telemetry failed: {cost_exc}")
+
+        # Pydantic-валідація вже відбулася всередині Task через
+        # output_pydantic=SEOMetadataBundle. seo_result.pydantic — це
+        # validated instance.
+        bundle: SEOMetadataBundle = seo_result.pydantic  # type: ignore
+        result['bundle'] = bundle
+
+        seo_json_path = os.path.join(output_dir, 'seo_metadata.json')
+        with open(seo_json_path, 'w', encoding='utf-8') as f:
+            json.dump(
+                bundle.model_dump(),
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        result['path'] = seo_json_path
+        logger.info(f"SEO metadata bundle saved: {seo_json_path}")
+
+    except Exception as exc:
+        logger.exception("SEO metadata post-hook failed")
+        result['error'] = str(exc)
+
+    return result

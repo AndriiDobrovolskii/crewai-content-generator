@@ -7,9 +7,10 @@
 Sequential pipeline with 6 singleton agents and explicit context chaining:
 
 ```plaintext
-url_discovery → content_extraction → tech_specs_extraction → seo_strategy → copywriting → quality_assurance → html_integration
-       ↑                ↑                    ↑                      ↑              ↑                 ↑                ↑
-  web_researcher   web_researcher    tech_specs_analyst      seo_strategist    copywriter       editor_qa    frontend_developer
+url_discovery → content_extraction → tech_specs_extraction → seo_strategy → copywriting → quality_assurance → image_intelligence → html_integration
+       ↑                ↑                    ↑                      ↑              ↑                 ↑                  ↑                       ↑
+  web_researcher   web_researcher    tech_specs_analyst      seo_strategist    copywriter       editor_qa     image_intel_analyst       frontend_developer
+                                                                                                                  (NEW v2)
 ```
 
 Context chain (each task depends on upstream output):
@@ -38,6 +39,26 @@ One parameterized crew per target language:
 3. If `ua_is_production=False` (non-UA stores): Ukrainian output is `REVIEW_Ukrainian_*.html` (internal QA artifact)
 4. Then remaining languages from `SITES_CONFIG[site]["languages"]` are generated sequentially
 
+### Phase 3: SEO Metadata Post-Hook (v2)
+
+After ALL language HTML files (Phase 1 EN base + Phase 2 localizations) are
+written to disk, `run_seo_metadata_post_hook(...)` runs the `SEOMetadataCrew`
+once. The crew has a single agent (`seo_metadata_extractor`) and produces a
+Pydantic-validated `SEOMetadataBundle` written to `output_dir/seo_metadata.json`.
+
+Inputs:
+- `product_name`, `site_name`, `currency_symbol`
+- `finalized_html_by_language`: `{iso_code: html_string}` for every language
+
+Per-language output entry:
+- `h1`: clean `[Brand] [Model]`
+- `meta_title`: ≤55 chars, ends with `| {site_name}`
+- `meta_description`: ≤155 chars, includes currency + 1 hard spec,
+  ends with localized `Buy now ➔`
+
+Pydantic validators enforce length, ISO code format, CTA arrow presence,
+and forbidden-emoji exclusion at write time — not at review time.
+
 ## LLM Routing
 
 ## Model Configuration
@@ -62,10 +83,12 @@ One parameterized crew per target language:
 ## Pydantic Output Contracts
 
 | Schema | Producer | Consumer | Purpose |
-| -------- | ---------- | ---------- | --------- |
-| `TechSpecsOutput` | tech_specs_analyst | copywriter, QA, frontend | Ground truth for all specs |
-| `QAVerdict` | editor_qa | html_integration, main.py | APPROVED/REJECTED + checklist |
+|---|---|---|---|
+| `TechSpecsOutput` | tech_specs_analyst | copywriter, QA, image_intel, frontend | Ground truth for all specs |
+| `QAVerdict` | editor_qa | image_intel, html_integration, main.py | APPROVED/REJECTED + checklist |
 | `SEOBriefOutput` | seo_strategist | copywriter | Keywords, meta tags, H2/H3 outline |
+| `ImageStoryboard` | image_intelligence_analyst | frontend_developer | Per-image: alt, lead-in, anchor, loading strategy, order |
+| `SEOMetadataBundle` | seo_metadata_extractor | post-pipeline JSON artifact | Per-language h1/meta_title/meta_description |
 
 ## Filament Detection
 

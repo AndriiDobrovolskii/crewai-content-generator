@@ -14,6 +14,10 @@ from content_generator.crew import (
     TechSpecsOutput,
     QAVerdict,
     SupportData,
+    ImageStoryboard,
+    ImageStoryboardItem,
+    SEOMetadataEntry,
+    SEOMetadataBundle,
     _load_yaml_config,
 )
 
@@ -215,3 +219,99 @@ class TestLoadYamlConfig:
         yaml_file.write_text("- item1\n- item2\n", encoding="utf-8")
         with pytest.raises(ValueError, match="mapping"):
             _load_yaml_config(str(yaml_file))
+
+
+# ---------------------------------------------------------------------------
+# v2 – ImageStoryboard Pydantic invariants (BLOCK 10)
+# ---------------------------------------------------------------------------
+
+class TestImageStoryboard:
+
+    VALID_ITEM = {
+        "url": "https://example.com/img1.jpg",
+        "alt_text": "PUDU HolaBot front view with four illuminated trays "
+                    "showing the 15 kg per tray capacity demonstration",
+        "lead_in_paragraph": "The image below shows the four illuminated trays.",
+        "placement_anchor": "HERO",
+        "loading_strategy": "eager",
+        "order": 1,
+    }
+
+    def test_empty_storyboard_is_valid(self):
+        sb = ImageStoryboard(items=[])
+        assert sb.items == []
+
+    def test_single_eager_image_passes(self):
+        sb = ImageStoryboard(items=[self.VALID_ITEM])
+        assert sb.items[0].loading_strategy == "eager"
+
+    def test_two_eager_images_rejected(self):
+        item2 = {**self.VALID_ITEM, "url": "https://x/img2.jpg", "order": 2}
+        with pytest.raises(ValidationError, match="exactly ONE 'eager'"):
+            ImageStoryboard(items=[self.VALID_ITEM, item2])
+
+    def test_eager_not_min_order_rejected(self):
+        eager_high = {**self.VALID_ITEM, "order": 5}
+        lazy_low = {**self.VALID_ITEM, "url": "https://x/lo.jpg",
+                    "loading_strategy": "lazy", "order": 1}
+        with pytest.raises(ValidationError, match="lowest order"):
+            ImageStoryboard(items=[eager_high, lazy_low])
+
+    def test_duplicate_urls_rejected(self):
+        item2 = {**self.VALID_ITEM, "loading_strategy": "lazy", "order": 2}
+        with pytest.raises(ValidationError, match="Duplicate image URLs"):
+            ImageStoryboard(items=[self.VALID_ITEM, item2])
+
+
+# ---------------------------------------------------------------------------
+# v2 – SEOMetadataBundle Pydantic invariants (BLOCK 10)
+# ---------------------------------------------------------------------------
+
+class TestSEOMetadataBundle:
+
+    VALID_ENTRY = {
+        "language": "en-GB",
+        "h1": "PUDU HolaBot",
+        "meta_title": "PUDU HolaBot - 60 kg Service Robot | EXPERT3D",
+        "meta_description": "Autonomous service robot, 60 kg payload, "
+                            "SLAM navigation. From €X,XXX. Buy now ➔",
+    }
+
+    def test_valid_bundle_passes(self):
+        bundle = SEOMetadataBundle(site_name="EXPERT3D",
+                                   seo_data=[self.VALID_ENTRY])
+        assert bundle.seo_data[0].language == "en-GB"
+
+    def test_meta_title_over_55_rejected(self):
+        bad = {**self.VALID_ENTRY,
+               "meta_title": "X" * 56}
+        with pytest.raises(ValidationError):
+            SEOMetadataEntry(**bad)
+
+    def test_meta_description_without_arrow_rejected(self):
+        bad = {**self.VALID_ENTRY,
+               "meta_description": "Buy now without the arrow."}
+        with pytest.raises(ValidationError, match="'➔' arrow"):
+            SEOMetadataEntry(**bad)
+
+    def test_meta_description_over_155_rejected(self):
+        bad = {**self.VALID_ENTRY, "meta_description": "X" * 156 + "➔"}
+        with pytest.raises(ValidationError):
+            SEOMetadataEntry(**bad)
+
+    def test_forbidden_emoji_in_title_rejected(self):
+        bad = {**self.VALID_ENTRY,
+               "meta_title": "📦 PUDU HolaBot | EXPERT3D"}
+        with pytest.raises(ValidationError, match="forbidden rune"):
+            SEOMetadataEntry(**bad)
+
+    def test_invalid_iso_code_rejected(self):
+        bad = {**self.VALID_ENTRY, "language": "english"}
+        with pytest.raises(ValidationError):
+            SEOMetadataEntry(**bad)
+
+    def test_duplicate_languages_in_bundle_rejected(self):
+        entry2 = {**self.VALID_ENTRY, "h1": "PUDU HolaBot 2"}
+        with pytest.raises(ValidationError, match="Duplicate language"):
+            SEOMetadataBundle(site_name="EXPERT3D",
+                              seo_data=[self.VALID_ENTRY, entry2])
