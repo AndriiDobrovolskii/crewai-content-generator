@@ -203,6 +203,7 @@ def run_pipeline():
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
             core_crew_module.quality_assurance_task(),
+            core_crew_module.image_intelligence_task(),
             core_crew_module.html_integration_task()
         ]
     else:
@@ -212,6 +213,7 @@ def run_pipeline():
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
             core_crew_module.quality_assurance_task(),
+            core_crew_module.image_intelligence_task(),
             core_crew_module.html_integration_task()
         ]
 
@@ -369,6 +371,7 @@ def train_pipeline():
         core_crew_module.seo_strategy_task(),
         core_crew_module.copywriting_task(),
         core_crew_module.quality_assurance_task(),
+        core_crew_module.image_intelligence_task(),
         core_crew_module.html_integration_task()
     ]
 

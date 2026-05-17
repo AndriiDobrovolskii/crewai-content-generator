@@ -50,6 +50,48 @@ def _save_html(output_dir: str, filename: str, html_content: str) -> str:
     return filepath
 
 
+def _strip_markdown_fence(html: str) -> str:
+    """Видаляє markdown code fence якщо LLM загорнув вивід у ```html ... ```."""
+    import re
+    # Варіант 1: ```html на початку
+    html = re.sub(r'^```(?:html)?\s*\n', '', html.strip())
+    # Варіант 2: ``` в кінці
+    html = re.sub(r'\n```\s*$', '', html)
+    return html.strip()
+
+
+# Мапінг user-friendly міток мов → BCP-47 ISO коди для SEO metadata bundle.
+_LANGUAGE_LABEL_TO_ISO: dict[str, str | None] = {
+    "English (Base)": "en-GB",
+    "English":        "en-GB",
+    "Ukrainian":      "uk-UA",
+    "Ukrainian (Review)": "uk-UA",
+    "Russian":        "ru-UA",
+    "Polish":         "pl-PL",
+    "German":         "de-DE",
+    "Spanish (Castilian es-ES)": "es-ES",
+    "Spanish":        "es-ES",
+    "American English": "en-US",
+    "US Spanish":     "es-US",
+}
+
+
+def _label_to_iso(lang_label: str, site_info: dict) -> str | None:
+    """Конвертує user-friendly мітку мови у BCP-47 ISO код.
+
+    Для US-магазину (localizer_us) "English (Base)" / "English" → "en-US".
+    Повертає None для невідомих міток — вони виключаються з SEO bundle.
+    """
+    if site_info.get("localizer") == "localizer_us":
+        us_overrides: dict[str, str] = {
+            "English (Base)": "en-US",
+            "English": "en-US",
+        }
+        if lang_label in us_overrides:
+            return us_overrides[lang_label]
+    return _LANGUAGE_LABEL_TO_ISO.get(lang_label)
+
+
 class _ThreadLocalStdout:
     """Перехоплює stdout для всіх потоків; callback маршрутизується через threading.local().
 
@@ -282,6 +324,7 @@ def run_pipeline_headless(
         ECommerceContentCrew,
         LocalizationCrew,
         SITES_CONFIG,
+        run_seo_metadata_post_hook,
     )
 
     task_cb = _make_task_callback(log_callback) if log_callback else None
@@ -420,6 +463,7 @@ def run_pipeline_headless(
             core_crew_module.seo_strategy_task(),
             core_crew_module.copywriting_task(),
             core_crew_module.quality_assurance_task(),
+            core_crew_module.image_intelligence_task(),
             core_crew_module.html_integration_task(),
         ]
 
@@ -436,7 +480,7 @@ def run_pipeline_headless(
                 task_outputs=getattr(core_result, "tasks_output", None),
             )
 
-        base_english_html = core_result.raw
+        base_english_html = _strip_markdown_fence(core_result.raw)
         english_filename = f"{folder_name}_BASE_English.html"
         _save_html(output_dir, english_filename, base_english_html)
         result["files"]["English (Base)"] = base_english_html
@@ -482,8 +526,9 @@ def run_pipeline_headless(
                 task_outputs=getattr(ua_result, "tasks_output", None),
             )
 
-        _save_html(output_dir, ua_filename, ua_result.raw)
-        result["files"][ua_label] = ua_result.raw
+        ua_html = _strip_markdown_fence(ua_result.raw)
+        _save_html(output_dir, ua_filename, ua_html)
+        result["files"][ua_label] = ua_html
         _log(f"💾 Збережено: {ua_filename}\n")
 
         # ── Крок 2: Решта мов ────────────────────────────────────────────
@@ -517,11 +562,39 @@ def run_pipeline_headless(
                     task_outputs=getattr(loc_result, "tasks_output", None),
                 )
 
+            loc_html = _strip_markdown_fence(loc_result.raw)
             safe_lang = language.split(" ")[0]
             filename = f"{folder_name}_{safe_lang}.html"
-            _save_html(output_dir, filename, loc_result.raw)
-            result["files"][language] = loc_result.raw
+            _save_html(output_dir, filename, loc_html)
+            result["files"][language] = loc_html
             _log(f"  💾 Збережено: {filename}\n")
+
+        # ── Post-pipeline: SEO metadata bundle ───────────────────────────
+        _log("\n📊 Генерація seo_metadata.json...\n")
+
+        finalized_html_by_language: dict[str, str] = {}
+        for lang_label, html_content in result["files"].items():
+            iso = _label_to_iso(lang_label, site_info)
+            if iso and isinstance(html_content, str):
+                finalized_html_by_language[iso] = html_content
+
+        if finalized_html_by_language:
+            seo_hook_result = run_seo_metadata_post_hook(
+                product_name=product_name,
+                site_name=site,
+                currency_symbol=site_info.get("currency_symbol", "€"),
+                finalized_html_by_language=finalized_html_by_language,
+                output_dir=output_dir,
+                task_callback=task_cb,
+                cost_tracker=cost_tracker,
+            )
+            if seo_hook_result.get("path"):
+                _log(f"💾 SEO metadata збережено: {seo_hook_result['path']}\n")
+                result["files"]["SEO Metadata"] = seo_hook_result["path"]
+            elif seo_hook_result.get("error"):
+                _log(f"⚠️ SEO metadata generation failed: {seo_hook_result['error']}\n")
+        else:
+            _log("⚠️ No finalized HTML to extract SEO metadata from.\n")
 
         # ── Cost report ───────────────────────────────────────────────────
         if cost_tracker is not None:
