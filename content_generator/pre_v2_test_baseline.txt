@@ -1,0 +1,152 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- C:\Work\crewAI-content-generator\content_generator\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Work\crewAI-content-generator\content_generator
+configfile: pyproject.toml
+plugins: anyio-4.12.1, mock-3.15.1
+collecting ... collected 89 items
+
+docs/test_cost_tracker.py::TestPricingLoading::test_loads_valid_yaml PASSED [  1%]
+docs/test_cost_tracker.py::TestPricingLoading::test_raises_on_missing_file PASSED [  2%]
+docs/test_cost_tracker.py::TestPricingLoading::test_raises_on_malformed_yaml PASSED [  3%]
+docs/test_cost_tracker.py::TestPricingLoading::test_raises_on_invalid_pricing_entry PASSED [  4%]
+docs/test_cost_tracker.py::TestCostComputation::test_gpt4o_cost_calculation_exact PASSED [  5%]
+docs/test_cost_tracker.py::TestCostComputation::test_gpt4o_mini_cost_calculation_exact PASSED [  6%]
+docs/test_cost_tracker.py::TestCostComputation::test_unknown_model_returns_zero_with_flag PASSED [  7%]
+docs/test_cost_tracker.py::TestCostComputation::test_zero_tokens_returns_zero PASSED [  8%]
+docs/test_cost_tracker.py::TestCostComputation::test_decimal_precision_no_float_drift PASSED [ 10%]
+docs/test_cost_tracker.py::TestRegisterKickoff::test_basic_kickoff_registration PASSED [ 11%]
+docs/test_cost_tracker.py::TestRegisterKickoff::test_register_with_per_task_breakdown PASSED [ 12%]
+docs/test_cost_tracker.py::TestRegisterKickoff::test_register_handles_none_usage_metrics PASSED [ 13%]
+docs/test_cost_tracker.py::TestRegisterKickoff::test_register_isolated_from_exceptions PASSED [ 14%]
+docs/test_cost_tracker.py::TestRegisterKickoff::test_unknown_model_marks_kickoff PASSED [ 15%]
+docs/test_cost_tracker.py::TestEmbeddings::test_register_embedding PASSED [ 16%]
+docs/test_cost_tracker.py::TestEmbeddings::test_unknown_embedding_model PASSED [ 17%]
+docs/test_cost_tracker.py::TestExternalAPIs::test_register_and_aggregate_calls PASSED [ 19%]
+docs/test_cost_tracker.py::TestExternalAPIs::test_unknown_api_pricing_treated_as_zero PASSED [ 20%]
+docs/test_cost_tracker.py::TestTotalAggregation::test_total_sums_all_sources PASSED [ 21%]
+docs/test_cost_tracker.py::TestOutputSinks::test_to_json_writes_valid_pydantic_roundtrip PASSED [ 22%]
+docs/test_cost_tracker.py::TestOutputSinks::test_to_console_does_not_raise PASSED [ 23%]
+docs/test_cost_tracker.py::TestOutputSinks::test_to_dict_returns_dict PASSED [ 24%]
+tests/integration/test_pipeline_runner.py::TestThreadLocalStdoutRouting::test_bug17_write_routes_to_calling_thread_callback PASSED [ 25%]
+tests/integration/test_pipeline_runner.py::TestThreadLocalStdoutRouting::test_bug17_thread_without_callback_does_not_receive_output PASSED [ 26%]
+tests/integration/test_pipeline_runner.py::TestThreadLocalStdoutRouting::test_bug17_context_manager_sets_and_clears_thread_local PASSED [ 28%]
+tests/integration/test_pipeline_runner.py::TestMakeTaskCallback::test_make_task_callback_calls_log_cb_with_agent_name PASSED [ 29%]
+tests/integration/test_pipeline_runner.py::TestMakeTaskCallback::test_make_task_callback_does_not_raise_on_bad_task_output PASSED [ 30%]
+tests/integration/test_pipeline_runner.py::TestParseUrlsFromOutput::test_extracts_https_urls PASSED [ 31%]
+tests/integration/test_pipeline_runner.py::TestParseUrlsFromOutput::test_deduplicates_urls PASSED [ 32%]
+tests/integration/test_pipeline_runner.py::TestParseUrlsFromOutput::test_strips_trailing_punctuation PASSED [ 33%]
+tests/unit/test_cost_tracker.py::TestPricingLoading::test_loads_valid_yaml PASSED [ 34%]
+tests/unit/test_cost_tracker.py::TestPricingLoading::test_raises_on_missing_file PASSED [ 35%]
+tests/unit/test_cost_tracker.py::TestPricingLoading::test_raises_on_malformed_yaml PASSED [ 37%]
+tests/unit/test_cost_tracker.py::TestPricingLoading::test_raises_on_invalid_pricing_entry PASSED [ 38%]
+tests/unit/test_cost_tracker.py::TestCostComputation::test_gpt4o_cost_calculation_exact PASSED [ 39%]
+tests/unit/test_cost_tracker.py::TestCostComputation::test_gpt4o_mini_cost_calculation_exact PASSED [ 40%]
+tests/unit/test_cost_tracker.py::TestCostComputation::test_unknown_model_returns_zero_with_flag PASSED [ 41%]
+tests/unit/test_cost_tracker.py::TestCostComputation::test_zero_tokens_returns_zero PASSED [ 42%]
+tests/unit/test_cost_tracker.py::TestCostComputation::test_decimal_precision_no_float_drift PASSED [ 43%]
+tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_basic_kickoff_registration FAILED [ 44%]
+tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_with_per_task_breakdown FAILED [ 46%]
+tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_handles_none_usage_metrics FAILED [ 47%]
+tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_isolated_from_exceptions FAILED [ 48%]
+tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_unknown_model_marks_kickoff FAILED [ 49%]
+tests/unit/test_cost_tracker.py::TestEmbeddings::test_register_embedding PASSED [ 50%]
+tests/unit/test_cost_tracker.py::TestEmbeddings::test_unknown_embedding_model PASSED [ 51%]
+tests/unit/test_cost_tracker.py::TestExternalAPIs::test_register_and_aggregate_calls PASSED [ 52%]
+tests/unit/test_cost_tracker.py::TestExternalAPIs::test_unknown_api_pricing_treated_as_zero PASSED [ 53%]
+tests/unit/test_cost_tracker.py::TestTotalAggregation::test_total_sums_all_sources FAILED [ 55%]
+tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_json_writes_valid_pydantic_roundtrip FAILED [ 56%]
+tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_console_does_not_raise FAILED [ 57%]
+tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_dict_returns_dict FAILED [ 58%]
+tests/unit/test_crew_schemas.py::TestTechSpecsOutputSupportData::test_bug08_missing_support_data_does_not_raise_validation_error PASSED [ 59%]
+tests/unit/test_crew_schemas.py::TestTechSpecsOutputSupportData::test_bug08_default_support_data_has_empty_lists PASSED [ 60%]
+tests/unit/test_crew_schemas.py::TestTechSpecsOutputSupportData::test_bug08_explicit_support_data_is_preserved PASSED [ 61%]
+tests/unit/test_crew_schemas.py::TestNormalizeSpecValues::test_bug07_scalar_string_category_wraps_in_dict PASSED [ 62%]
+tests/unit/test_crew_schemas.py::TestNormalizeSpecValues::test_bug07_list_category_joins_to_comma_string PASSED [ 64%]
+tests/unit/test_crew_schemas.py::TestNormalizeSpecValues::test_bug07_none_category_gives_empty_dict PASSED [ 65%]
+tests/unit/test_crew_schemas.py::TestNormalizeSpecValues::test_bug07_nested_list_values_within_dict_are_joined PASSED [ 66%]
+tests/unit/test_crew_schemas.py::TestNormalizeSpecValues::test_bug07_normal_nested_dict_passes_through_unchanged PASSED [ 67%]
+tests/unit/test_crew_schemas.py::TestQAVerdictConsistency::test_bug11_approved_with_score_below_80_raises_validation_error PASSED [ 68%]
+tests/unit/test_crew_schemas.py::TestQAVerdictConsistency::test_bug11_approved_with_score_at_exactly_80_is_valid PASSED [ 69%]
+tests/unit/test_crew_schemas.py::TestQAVerdictConsistency::test_bug11_approved_with_score_above_80_is_valid PASSED [ 70%]
+tests/unit/test_crew_schemas.py::TestQAVerdictConsistency::test_bug11_rejected_with_any_score_is_valid PASSED [ 71%]
+tests/unit/test_crew_schemas.py::TestQAVerdictConsistency::test_bug11_approved_with_score_zero_raises PASSED [ 73%]
+tests/unit/test_crew_schemas.py::TestLoadYamlConfig::test_bug06_missing_file_raises_file_not_found_error PASSED [ 74%]
+tests/unit/test_crew_schemas.py::TestLoadYamlConfig::test_bug06_error_message_contains_path PASSED [ 75%]
+tests/unit/test_crew_schemas.py::TestLoadYamlConfig::test_bug06_error_message_contains_helpful_hint PASSED [ 76%]
+tests/unit/test_crew_schemas.py::TestLoadYamlConfig::test_bug06_valid_yaml_file_loads_correctly PASSED [ 77%]
+tests/unit/test_crew_schemas.py::TestLoadYamlConfig::test_bug06_non_dict_yaml_raises_value_error PASSED [ 78%]
+tests/unit/test_custom_tools.py::TestFormatNumber::test_bug13_format_number_integer_float_returns_no_decimal PASSED [ 79%]
+tests/unit/test_custom_tools.py::TestFormatNumber::test_bug13_format_number_two_decimal_places_unchanged PASSED [ 80%]
+tests/unit/test_custom_tools.py::TestFormatNumber::test_bug13_format_number_no_repr_artifacts_from_float_arithmetic PASSED [ 82%]
+tests/unit/test_custom_tools.py::TestFormatNumber::test_bug13_format_number_zero_gives_zero PASSED [ 83%]
+tests/unit/test_custom_tools.py::TestFormatNumber::test_bug13_format_number_trailing_zero_stripped PASSED [ 84%]
+tests/unit/test_custom_tools.py::TestUSMeasurementCalculatorMissingValue::test_bug14_missing_value_returns_error_string PASSED [ 85%]
+tests/unit/test_custom_tools.py::TestUSMeasurementCalculatorMissingValue::test_bug14_missing_value_mentions_label_in_error PASSED [ 86%]
+tests/unit/test_custom_tools.py::TestUSMeasurementCalculatorMissingValue::test_bug14_missing_value_does_not_raise PASSED [ 87%]
+tests/unit/test_custom_tools.py::TestUSMeasurementCalculatorMissingValue::test_bug14_valid_conversion_still_works_alongside_missing PASSED [ 88%]
+tests/unit/test_custom_tools.py::TestContentSimilarityBoundary::test_bug15_returns_passed_at_exactly_80_percent_uniqueness PASSED [ 89%]
+tests/unit/test_custom_tools.py::TestContentSimilarityBoundary::test_bug15_returns_failed_below_80_percent PASSED [ 91%]
+tests/unit/test_custom_tools.py::TestContentSimilarityBoundary::test_bug15_non_empty_result_for_any_valid_inputs PASSED [ 92%]
+tests/unit/test_custom_tools.py::TestContentSimilarityBoundary::test_bug15_identical_text_fails PASSED [ 93%]
+tests/unit/test_parsers.py::test_bug04_md_italic_re_completes_under_10ms_on_100_unmatched_asterisks PASSED [ 94%]
+tests/unit/test_parsers.py::test_bug04_md_italic_re_strips_real_italic_correctly PASSED [ 95%]
+tests/unit/test_parsers.py::test_bug05_extract_text_from_md_reads_cp1252_file_without_crash PASSED [ 96%]
+tests/unit/test_parsers.py::test_bug05_extract_text_from_md_handles_missing_file_gracefully PASSED [ 97%]
+tests/unit/test_parsers.py::test_bug01_extract_pdf_with_gemini_deletes_file_on_generate_content_error PASSED [ 98%]
+tests/unit/test_parsers.py::test_bug01_extract_pdf_with_gemini_deletes_file_on_successful_run PASSED [100%]
+
+================================== FAILURES ===================================
+_____________ TestRegisterKickoff.test_basic_kickoff_registration _____________
+tests\unit\test_cost_tracker.py:177: in test_basic_kickoff_registration
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+__________ TestRegisterKickoff.test_register_with_per_task_breakdown __________
+tests\unit\test_cost_tracker.py:208: in test_register_with_per_task_breakdown
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+________ TestRegisterKickoff.test_register_handles_none_usage_metrics _________
+tests\unit\test_cost_tracker.py:225: in test_register_handles_none_usage_metrics
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+_________ TestRegisterKickoff.test_register_isolated_from_exceptions __________
+tests\unit\test_cost_tracker.py:247: in test_register_isolated_from_exceptions
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+____________ TestRegisterKickoff.test_unknown_model_marks_kickoff _____________
+tests\unit\test_cost_tracker.py:260: in test_unknown_model_marks_kickoff
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+______________ TestTotalAggregation.test_total_sums_all_sources _______________
+tests\unit\test_cost_tracker.py:328: in test_total_sums_all_sources
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+________ TestOutputSinks.test_to_json_writes_valid_pydantic_roundtrip _________
+tests\unit\test_cost_tracker.py:359: in test_to_json_writes_valid_pydantic_roundtrip
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+_______________ TestOutputSinks.test_to_console_does_not_raise ________________
+tests\unit\test_cost_tracker.py:383: in test_to_console_does_not_raise
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+__________________ TestOutputSinks.test_to_dict_returns_dict __________________
+tests\unit\test_cost_tracker.py:398: in test_to_dict_returns_dict
+    tracker.register_kickoff(
+E   TypeError: PipelineCostTracker.register_kickoff() got an unexpected keyword argument 'before_snapshot'
+============================== warnings summary ===============================
+.venv\Lib\site-packages\PyPDF2\__init__.py:21
+  C:\Work\crewAI-content-generator\content_generator\.venv\Lib\site-packages\PyPDF2\__init__.py:21: DeprecationWarning: PyPDF2 is deprecated. Please move to the pypdf library instead.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_basic_kickoff_registration
+FAILED tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_with_per_task_breakdown
+FAILED tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_handles_none_usage_metrics
+FAILED tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_register_isolated_from_exceptions
+FAILED tests/unit/test_cost_tracker.py::TestRegisterKickoff::test_unknown_model_marks_kickoff
+FAILED tests/unit/test_cost_tracker.py::TestTotalAggregation::test_total_sums_all_sources
+FAILED tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_json_writes_valid_pydantic_roundtrip
+FAILED tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_console_does_not_raise
+FAILED tests/unit/test_cost_tracker.py::TestOutputSinks::test_to_dict_returns_dict
+================== 9 failed, 80 passed, 1 warning in 22.76s ===================
